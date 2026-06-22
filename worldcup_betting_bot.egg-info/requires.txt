@@ -1,0 +1,12 @@
+aiogram<4,>=3.7
+aiohttp<4,>=3.9
+apscheduler<4,>=3.10
+asyncpg<1,>=0.29
+pydantic<3,>=2.7
+pydantic-settings<3,>=2.3
+sqlalchemy[asyncio]<3,>=2.0
+
+[dev]
+pytest<9,>=8.2
+pytest-asyncio<1,>=0.23
+aiosqlite<1,>=0.20
