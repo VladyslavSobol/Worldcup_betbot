@@ -669,6 +669,15 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
             settlements_only=True,
         )
 
+    @router.message(Command("admin_open_bets"))
+    @router.message(Command("admin_debug_settlement"))
+    async def admin_debug_settlement(message: Message) -> None:
+        if not _is_admin(message, settings):
+            await message.answer("Ця команда тільки для адміна.")
+            return
+        text = await _admin_debug_settlement_text(session_factory)
+        await message.answer(text)
+
     @router.message(Command("admin_close"))
     async def admin_close(message: Message) -> None:
         if not _is_admin(message, settings):
@@ -1187,6 +1196,89 @@ async def _mybets_view(
 async def _openbets_text(session_factory: async_sessionmaker[AsyncSession]) -> str:
     text, _ = await _openbets_view(session_factory, page=0)
     return text
+
+
+async def _admin_debug_settlement_text(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> str:
+    async with session_factory() as session:
+        single_bets = (
+            await session.scalars(
+                select(Bet)
+                .where(Bet.status == BetStatus.open)
+                .options(
+                    selectinload(Bet.user),
+                    selectinload(Bet.market).selectinload(Market.match),
+                )
+                .order_by(Bet.id.desc())
+                .limit(30)
+            )
+        ).all()
+        express_bets = (
+            await session.scalars(
+                select(ExpressBet)
+                .where(ExpressBet.status == BetStatus.open)
+                .options(
+                    selectinload(ExpressBet.user),
+                    selectinload(ExpressBet.items).selectinload(ExpressBetItem.match),
+                    selectinload(ExpressBet.items).selectinload(ExpressBetItem.market),
+                )
+                .order_by(ExpressBet.id.desc())
+                .limit(20)
+            )
+        ).all()
+
+    lines = [
+        "🛠 Діагностика розрахунку",
+        "",
+        f"Відкриті одиночні ставки: {len(single_bets)}",
+        f"Відкриті експреси: {len(express_bets)}",
+    ]
+
+    if single_bets:
+        lines.extend(["", "🎟 Одиночні:"])
+        for bet in single_bets[:10]:
+            match = bet.market.match if bet.market else None
+            if match:
+                score = _match_score_text(match)
+                lines.append(
+                    f"#{bet.id} · match_id {bet.match_id} · {match.status.value} · {score}\n"
+                    f"{format_match_pair(match)}\n"
+                    f"👤 {user_label(bet.user)} · {format_cents(bet.stake_cents)} "
+                    f"@ {format_decimal(bet.locked_decimal_odds)}"
+                )
+            else:
+                lines.append(f"#{bet.id} · match_id {bet.match_id} · матч не завантажено")
+
+    if express_bets:
+        lines.extend(["", "🧾 Експреси:"])
+        for express in express_bets[:10]:
+            lines.append(
+                f"Експрес #{express.id} · {user_label(express.user)} · "
+                f"{format_cents(express.stake_cents)} @ {format_decimal(express.total_odds)}"
+            )
+            for item in express.items:
+                match = item.match
+                if match:
+                    lines.append(
+                        f"  • item #{item.id} · match_id {item.match_id} · "
+                        f"{item.status.value} · {match.status.value} · {_match_score_text(match)}"
+                    )
+                else:
+                    lines.append(
+                        f"  • item #{item.id} · match_id {item.match_id} · {item.status.value}"
+                    )
+
+    if len(single_bets) > 10 or len(express_bets) > 10:
+        lines.append("")
+        lines.append("Показано перші 10 записів кожного типу.")
+    return "\n".join(lines)
+
+
+def _match_score_text(match: Match) -> str:
+    if match.home_score is None or match.away_score is None:
+        return "рахунок не задано"
+    return f"{match.home_score}:{match.away_score}"
 
 
 async def _openbets_view(

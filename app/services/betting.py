@@ -358,6 +358,10 @@ async def void_match(
     reason: str,
     admin_telegram_id: int | None = None,
 ) -> int:
+    match = await session.scalar(select(Match).where(Match.id == match_id))
+    if not match:
+        raise BettingError("Матч не знайдено.")
+
     bets = (
         await session.scalars(
             select(Bet)
@@ -375,6 +379,15 @@ async def void_match(
         await session.scalars(select(Market).where(Market.match_id == match_id))
     ).all():
         market.status = MarketStatus.void
+
+    express_settled = await settle_express_items_for_match(
+        session,
+        match,
+        home_score=match.home_score or 0,
+        away_score=match.away_score or 0,
+        void=True,
+        reason=reason,
+    )
 
     session.add(
         SettlementLog(
