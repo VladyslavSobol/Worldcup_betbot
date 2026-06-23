@@ -661,6 +661,7 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
             home_goals = int(args[1])
             away_goals = int(args[2])
             async with session_factory() as session:
+                single_bet_ids, express_bet_ids = await _open_settlement_target_ids(session, match_id)
                 count = await settle_match(
                     session,
                     match_id,
@@ -669,16 +670,24 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
                     message.from_user.id,
                 )
                 match = await session.scalar(select(Match).where(Match.id == match_id))
+                details = await _settlement_results_for_targets(
+                    session,
+                    match,
+                    single_bet_ids,
+                    express_bet_ids,
+                )
                 await session.commit()
             text = f"Розраховано відкритих ставок: {count}."
             await message.answer(text)
             if match:
                 board = await _leaderboard_text(session_factory, settings)
+                details_block = f"{details}\n\n" if details else ""
                 await _announce_to_group(
                     session_factory,
                     bot,
                     "Матч розраховано.\n\n"
                     f"{match.home_team} {home_goals}:{away_goals} {match.away_team}\n\n"
+                    f"{details_block}"
                     f"{board}",
                     source_chat_id=message.chat.id,
                     settlements_only=True,
@@ -1171,6 +1180,135 @@ async def _announce_to_group(
     if not settlements_only and not group.announce_bets:
         return
     await bot.send_message(group.chat_id, text, reply_markup=group_menu_keyboard())
+
+
+async def _open_settlement_target_ids(
+    session: AsyncSession,
+    match_id: int,
+) -> tuple[list[int], list[int]]:
+    single_bet_ids = (
+        await session.scalars(
+            select(Bet.id).where(Bet.match_id == match_id, Bet.status == BetStatus.open)
+        )
+    ).all()
+    express_bet_ids = (
+        await session.scalars(
+            select(ExpressBetItem.express_bet_id).where(
+                ExpressBetItem.match_id == match_id,
+                ExpressBetItem.status == BetStatus.open,
+            )
+        )
+    ).all()
+    return list(single_bet_ids), list(dict.fromkeys(express_bet_ids))
+
+
+async def _settlement_results_for_targets(
+    session: AsyncSession,
+    match: Match | None,
+    single_bet_ids: list[int],
+    express_bet_ids: list[int],
+) -> str:
+    if not match:
+        return ""
+    single_bets = []
+    if single_bet_ids:
+        single_bets = (
+            await session.scalars(
+                select(Bet)
+                .where(Bet.id.in_(single_bet_ids), Bet.status != BetStatus.open)
+                .options(
+                    selectinload(Bet.user),
+                    selectinload(Bet.market).selectinload(Market.match),
+                )
+                .order_by(Bet.id)
+            )
+        ).all()
+
+    express_bets = []
+    if express_bet_ids:
+        express_bets = (
+            await session.scalars(
+                select(ExpressBet)
+                .where(ExpressBet.id.in_(express_bet_ids), ExpressBet.status != BetStatus.open)
+                .options(
+                    selectinload(ExpressBet.user),
+                    selectinload(ExpressBet.items),
+                )
+                .order_by(ExpressBet.id)
+            )
+        ).all()
+    return _settlement_results_text(match, list(single_bets), list(express_bets))
+
+
+def _settlement_results_text(
+    match: Match,
+    single_bets: list[Bet],
+    express_bets: list[ExpressBet],
+) -> str:
+    cards = [_settled_single_result_card(bet, match) for bet in single_bets]
+    cards.extend(_settled_express_result_card(express) for express in express_bets)
+    cards = [card for card in cards if card]
+    if not cards:
+        return ""
+    return "🎯 Результати ставок\n\n" + "\n\n━━━━━━━━━━━━\n\n".join(cards)
+
+
+def _settled_single_result_card(bet: Bet, match: Match) -> str:
+    if bet.status == BetStatus.won:
+        title = "✅ Ставка зайшла"
+    elif bet.status == BetStatus.lost:
+        title = "❌ Ставка не зайшла"
+    else:
+        title = "↩️ Ставку повернено"
+
+    lines = [
+        title,
+        "",
+        f"👤 {user_label(bet.user)}",
+        format_match_pair(match),
+        f"📌 {format_market_selection(bet.market, bet.selection)}",
+        f"📈 Кеф: {format_odds(bet.locked_decimal_odds)}",
+    ]
+    if bet.status == BetStatus.won:
+        profit = bet.payout_cents - bet.stake_cents
+        lines.append(f"💵 {format_money(bet.stake_cents)} → {format_money(bet.payout_cents)}")
+        lines.append(f"📊 Профіт: {format_profit(profit)}")
+    elif bet.status == BetStatus.lost:
+        lines.append(f"💸 Програш: {format_profit(-bet.stake_cents)}")
+    else:
+        lines.append(f"↩️ Повернено: {format_money(bet.payout_cents or bet.stake_cents)}")
+    return "\n".join(lines)
+
+
+def _settled_express_result_card(express: ExpressBet) -> str:
+    if express.status == BetStatus.open:
+        return ""
+    if express.status == BetStatus.won:
+        title = "✅ Експрес зайшов"
+    elif express.status == BetStatus.lost:
+        title = "❌ Експрес не зайшов"
+    else:
+        title = "↩️ Експрес повернено"
+
+    items = list(express.items or [])
+    lines = [
+        title,
+        "",
+        f"👤 {user_label(express.user)}",
+        f"🧾 Експрес #{express.id}",
+        f"📈 Загальний кеф: {format_odds(express.total_odds)}",
+        f"💵 Сума: {format_money(express.stake_cents)}",
+        f"Подій: {len(items)}",
+    ]
+    if express.status == BetStatus.won:
+        profit = express.payout_cents - express.stake_cents
+        lines.append(f"🏆 Виграш: {format_money(express.payout_cents)}")
+        lines.append(f"📊 Профіт: {format_profit(profit)}")
+    elif express.status == BetStatus.lost:
+        lines.append(f"💸 Програш: {format_profit(-express.stake_cents)}")
+    else:
+        lines.append(f"↩️ Повернено: {format_money(express.payout_cents or express.stake_cents)}")
+    return "\n".join(lines)
 
 
 async def _mybets_text(session_factory: async_sessionmaker[AsyncSession], telegram_id: int) -> str:

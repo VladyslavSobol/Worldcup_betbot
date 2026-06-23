@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.bot.handlers import _mybets_text, _settled_profit_cents, _stats_text
+from app.bot.handlers import _mybets_text, _settled_profit_cents, _settlement_results_text, _stats_text
 from app.models import BetStatus, ExpressBet, ExpressBetItem, Market, MarketType, Match, OddsSnapshot, User
 from app.services.betting import (
     add_to_bet_slip,
@@ -205,6 +205,34 @@ async def test_my_bets_text_includes_open_express_bets(session_factory, settings
     assert "Можливий виграш: $30.00" in text
 
 
+async def test_settlement_results_text_includes_single_and_express_outcomes(session_factory, settings):
+    async with session_factory() as session:
+        single_user = await _seed_user(session, telegram_id=10, username="single")
+        express_user = await _seed_user(session, telegram_id=20, username="express")
+        first = await _seed_open_odds(session, "match-announce-a", "Brazil", "Japan", "Brazil", Decimal("2.00"))
+        second = await _seed_open_odds(session, "match-announce-b", "France", "Iraq", "France", Decimal("1.50"))
+        await place_bet(session, single_user.telegram_id, first.id, 1000, settings)
+        await add_to_bet_slip(session, express_user.telegram_id, first.id, settings)
+        await add_to_bet_slip(session, express_user.telegram_id, second.id, settings)
+        await place_express_bet(session, express_user.telegram_id, 500, settings)
+        await settle_match(session, second.market.match_id, 1, 0)
+        await settle_match(session, first.market.match_id, 2, 1)
+
+        match = first.market.match
+        single_bets = await _settled_single_bets_for_match(session, match.id)
+        express_bets = await _settled_express_bets_for_match(session, match.id)
+
+    text = _settlement_results_text(match, single_bets, express_bets)
+
+    assert "🎯 Результати ставок" in text
+    assert "✅ Ставка зайшла" in text
+    assert "👤 single" in text
+    assert "📊 Профіт: +$10.00" in text
+    assert "✅ Експрес зайшов" in text
+    assert "👤 express" in text
+    assert "📊 Профіт: +$10.00" in text
+
+
 def test_settled_profit_uses_fallback_when_payout_is_missing():
     single = SimpleNamespace(
         stake_cents=1000,
@@ -287,3 +315,32 @@ async def _get_express(session, express_id: int) -> ExpressBet:
         .where(ExpressBet.id == express_id)
         .options(selectinload(ExpressBet.items).selectinload(ExpressBetItem.match))
     )
+
+
+async def _settled_single_bets_for_match(session, match_id: int):
+    from app.models import Bet
+
+    return (
+        await session.scalars(
+            select(Bet)
+            .where(Bet.match_id == match_id, Bet.status != BetStatus.open)
+            .options(
+                selectinload(Bet.user),
+                selectinload(Bet.market).selectinload(Market.match),
+            )
+        )
+    ).all()
+
+
+async def _settled_express_bets_for_match(session, match_id: int):
+    return (
+        await session.scalars(
+            select(ExpressBet)
+            .join(ExpressBet.items)
+            .where(ExpressBetItem.match_id == match_id, ExpressBet.status != BetStatus.open)
+            .options(
+                selectinload(ExpressBet.user),
+                selectinload(ExpressBet.items),
+            )
+        )
+    ).unique().all()
