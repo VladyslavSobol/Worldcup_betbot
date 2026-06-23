@@ -36,22 +36,7 @@ async def main() -> None:
     scheduler = AsyncIOScheduler(timezone="UTC")
     if settings.odds_api_key:
         client = OddsApiClient(settings)
-        scheduler.add_job(
-            _sync_odds_job,
-            "interval",
-            seconds=settings.odds_poll_seconds,
-            args=[session_factory, client],
-            next_run_time=None,
-            max_instances=1,
-        )
-        scheduler.add_job(
-            _sync_scores_job,
-            "interval",
-            seconds=settings.scores_poll_seconds,
-            args=[session_factory, client, bot, settings],
-            next_run_time=None,
-            max_instances=1,
-        )
+        _schedule_sync_jobs(scheduler, session_factory, client, bot, settings)
         scheduler.start()
         asyncio.create_task(_sync_odds_job(session_factory, client))
         asyncio.create_task(_sync_scores_job(session_factory, client, bot, settings))
@@ -61,6 +46,23 @@ async def main() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(build_router(session_factory, settings))
     await dispatcher.start_polling(bot)
+
+
+def _schedule_sync_jobs(scheduler, session_factory, client, bot: Bot, settings) -> None:
+    scheduler.add_job(
+        _sync_odds_job,
+        "interval",
+        seconds=settings.odds_poll_seconds,
+        args=[session_factory, client],
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _sync_scores_job,
+        "interval",
+        seconds=settings.scores_poll_seconds,
+        args=[session_factory, client, bot, settings],
+        max_instances=1,
+    )
 
 
 async def _sync_odds_job(session_factory, client: OddsApiClient) -> None:
