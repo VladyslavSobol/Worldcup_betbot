@@ -1476,11 +1476,21 @@ async def _stats_text(
     open_stakes = sum(bet.stake_cents for bet in open_bets) + sum(express.stake_cents for express in open_express_bets)
     bankroll = user.balance_cents + open_stakes
     profit = bankroll - settings.starting_balance_cents
+    odds_values = [Decimal(bet.locked_decimal_odds) for bet in bets] + [
+        Decimal(express.total_odds) for express in express_bets
+    ]
     best_profits = [
         *(_settled_profit_cents(bet) for bet in won),
         *(_settled_profit_cents(express) for express in won_express),
     ]
     best_profit = max(best_profits, default=0)
+    won_profits = [_settled_profit_cents(entry) for entry in [*won, *won_express]]
+    lost_stakes = [entry.stake_cents for entry in [*lost, *lost_express]]
+    average_odds = _average_decimal(odds_values)
+    total_won = sum(won_profits)
+    total_lost = sum(lost_stakes)
+    average_win = _average_cents(won_profits)
+    average_loss = _average_cents(lost_stakes)
     logger.debug(
         "Built stats: telegram_id=%s single_bets=%s express_bets=%s open_stakes=%s",
         telegram_id,
@@ -1498,8 +1508,26 @@ async def _stats_text(
         f"Відкриті: {len(open_bets) + len(open_express_bets)} · виграні: {won_count} · "
         f"програні: {lost_count} · void/push: {returned_count}\n"
         f"Win rate: {win_rate}%\n"
-        f"Найкращий чистий виграш: {_profit_text(best_profit)}"
+        f"Найкращий чистий виграш: {_profit_text(best_profit)}\n\n"
+        "📈 Деталі ставок\n"
+        f"🎯 Середній кеф: {format_decimal(average_odds)}\n"
+        f"💚 Середній виграш: {_profit_text(average_win)}\n"
+        f"💔 Середній програш: {_profit_text(-average_loss)}\n"
+        f"🏆 Виграно всього: {_profit_text(total_won)}\n"
+        f"📉 Програно всього: {_profit_text(-total_lost)}"
     )
+
+
+def _average_cents(values: list[int]) -> int:
+    if not values:
+        return 0
+    return int(round(sum(values) / len(values)))
+
+
+def _average_decimal(values: list[Decimal]) -> Decimal:
+    if not values:
+        return Decimal("0.00")
+    return (sum(values) / Decimal(len(values))).quantize(Decimal("0.01"))
 
 
 def _settled_profit_cents(entry) -> int:

@@ -15,6 +15,7 @@ from app.services.betting import (
     calculate_express_total_odds,
     get_bet_slip,
     leaderboard,
+    place_bet,
     place_express_bet,
     remove_from_bet_slip,
     settle_match,
@@ -160,6 +161,31 @@ async def test_stats_text_handles_user_without_wins(session_factory, settings):
 
     assert "Ставок всього: 0" in text
     assert "Найкращий чистий виграш: $0.00" in text
+
+
+async def test_stats_text_shows_average_odds_and_win_loss_totals(session_factory, settings):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        first = await _seed_open_odds(session, "match-stats-detail-a", "Brazil", "Japan", "Brazil", Decimal("2.00"))
+        second = await _seed_open_odds(session, "match-stats-detail-b", "France", "Iraq", "France", Decimal("1.50"))
+        lost_odds = await _seed_open_odds(session, "match-stats-detail-c", "Argentina", "Austria", "Argentina", Decimal("2.50"))
+        await add_to_bet_slip(session, user.telegram_id, first.id, settings)
+        await add_to_bet_slip(session, user.telegram_id, second.id, settings)
+        await place_express_bet(session, user.telegram_id, 1000, settings)
+        await place_bet(session, user.telegram_id, lost_odds.id, 500, settings)
+        await settle_match(session, first.market.match_id, 2, 1)
+        await settle_match(session, second.market.match_id, 1, 0)
+        await settle_match(session, lost_odds.market.match_id, 0, 1)
+        await session.commit()
+
+    text = await _stats_text(session_factory, user.telegram_id, settings)
+
+    assert "📈 Деталі ставок" in text
+    assert "Середній кеф: 2.75" in text
+    assert "Середній виграш: +$20.00" in text
+    assert "Середній програш: -$5.00" in text
+    assert "Виграно всього: +$20.00" in text
+    assert "Програно всього: -$5.00" in text
 
 
 def test_settled_profit_uses_fallback_when_payout_is_missing():
