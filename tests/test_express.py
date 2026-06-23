@@ -6,6 +6,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.bot.handlers import _stats_text
 from app.models import BetStatus, ExpressBet, ExpressBetItem, Market, MarketType, Match, OddsSnapshot, User
 from app.services.betting import (
     add_to_bet_slip,
@@ -123,6 +124,26 @@ async def test_leaderboard_counts_open_express_bets(session_factory, settings):
     assert rows[0][1] == 2500
     assert rows[0][2] == 10000
     assert rows[1][0].telegram_id == 2
+
+
+async def test_stats_text_counts_settled_express_bets(session_factory, settings):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        first = await _seed_open_odds(session, "match-stats-a", "Brazil", "Japan", "Brazil", Decimal("2.00"))
+        second = await _seed_open_odds(session, "match-stats-b", "France", "Iraq", "France", Decimal("1.50"))
+        await add_to_bet_slip(session, user.telegram_id, first.id, settings)
+        await add_to_bet_slip(session, user.telegram_id, second.id, settings)
+        await place_express_bet(session, user.telegram_id, 1000, settings)
+        await settle_match(session, first.market.match_id, 2, 1)
+        await settle_match(session, second.market.match_id, 1, 0)
+        await session.commit()
+
+    text = await _stats_text(session_factory, user.telegram_id, settings)
+
+    assert "Ставок всього: 1" in text
+    assert "Відкриті: 0 · виграні: 1 · програні: 0 · void/push: 0" in text
+    assert "Win rate: 100%" in text
+    assert "Найкращий чистий виграш: +$20.00" in text
 
 
 async def _seed_user(session, telegram_id: int = 10, username: str = "friend") -> User:

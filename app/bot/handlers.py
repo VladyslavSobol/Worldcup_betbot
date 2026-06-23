@@ -1416,14 +1416,24 @@ async def _stats_text(
     open_bets = [bet for bet in bets if bet.status == BetStatus.open]
     open_express_bets = [express for express in express_bets if express.status == BetStatus.open]
     won = [bet for bet in bets if bet.status == BetStatus.won]
+    won_express = [express for express in express_bets if express.status == BetStatus.won]
     lost = [bet for bet in bets if bet.status == BetStatus.lost]
+    lost_express = [express for express in express_bets if express.status == BetStatus.lost]
     returned = [bet for bet in bets if bet.status in {BetStatus.push, BetStatus.void}]
-    settled_count = len(won) + len(lost)
-    win_rate = int(round((len(won) / settled_count) * 100)) if settled_count else 0
+    returned_express = [
+        express for express in express_bets if express.status in {BetStatus.push, BetStatus.void}
+    ]
+    won_count = len(won) + len(won_express)
+    lost_count = len(lost) + len(lost_express)
+    returned_count = len(returned) + len(returned_express)
+    settled_count = won_count + lost_count
+    win_rate = int(round((won_count / settled_count) * 100)) if settled_count else 0
     open_stakes = sum(bet.stake_cents for bet in open_bets) + sum(express.stake_cents for express in open_express_bets)
     bankroll = user.balance_cents + open_stakes
     profit = bankroll - settings.starting_balance_cents
-    best_profit = max((bet.payout_cents - bet.stake_cents for bet in won), default=0)
+    best_single_profit = (bet.payout_cents - bet.stake_cents for bet in won)
+    best_express_profit = (express.payout_cents - express.stake_cents for express in won_express)
+    best_profit = max(*best_single_profit, *best_express_profit, 0)
     logger.debug(
         "Built stats: telegram_id=%s single_bets=%s express_bets=%s open_stakes=%s",
         telegram_id,
@@ -1437,8 +1447,9 @@ async def _stats_text(
         f"Банкрол: {format_cents(bankroll)} ({_profit_text(profit)})\n"
         f"Доступно: {format_cents(user.balance_cents)}\n"
         f"У відкритих: {format_cents(open_stakes)}\n\n"
-        f"Ставок всього: {len(bets)}\n"
-        f"Відкриті: {len(open_bets)} · виграні: {len(won)} · програні: {len(lost)} · void/push: {len(returned)}\n"
+        f"Ставок всього: {len(bets) + len(express_bets)}\n"
+        f"Відкриті: {len(open_bets) + len(open_express_bets)} · виграні: {won_count} · "
+        f"програні: {lost_count} · void/push: {returned_count}\n"
         f"Win rate: {win_rate}%\n"
         f"Найкращий чистий виграш: {_profit_text(best_profit)}"
     )
