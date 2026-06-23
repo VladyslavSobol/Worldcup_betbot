@@ -2,11 +2,12 @@
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.bot.handlers import _stats_text
+from app.bot.handlers import _settled_profit_cents, _stats_text
 from app.models import BetStatus, ExpressBet, ExpressBetItem, Market, MarketType, Match, OddsSnapshot, User
 from app.services.betting import (
     add_to_bet_slip,
@@ -146,6 +147,22 @@ async def test_stats_text_counts_settled_express_bets(session_factory, settings)
     assert "Відкриті: 0 · виграні: 1 · програні: 0 · void/push: 0" in text
     assert "Win rate: 100%" in text
     assert "Найкращий чистий виграш: +$20.00" in text
+
+
+def test_settled_profit_uses_fallback_when_payout_is_missing():
+    single = SimpleNamespace(
+        stake_cents=1000,
+        payout_cents=None,
+        locked_decimal_odds=Decimal("2.000"),
+    )
+    express = SimpleNamespace(
+        stake_cents=500,
+        payout_cents=None,
+        potential_payout_cents=600,
+    )
+
+    assert _settled_profit_cents(single) == 1000
+    assert _settled_profit_cents(express) == 100
 
 
 async def test_remove_from_bet_slip_removes_only_selected_item(session_factory, settings):

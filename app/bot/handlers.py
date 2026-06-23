@@ -6,6 +6,7 @@ import logging
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import select
@@ -51,7 +52,7 @@ from app.bot.keyboards import (
 from app.config import Settings
 from app.integrations.odds_api import OddsApiClient
 from app.models import Bet, BetStatus, ExpressBet, ExpressBetItem, Market, MarketStatus, MarketType, Match, MatchStatus, OddsSnapshot, User
-from app.money import format_cents, parse_cents
+from app.money import format_cents, parse_cents, payout_cents
 from app.services.betting import (
     BettingError,
     add_to_bet_slip,
@@ -297,9 +298,19 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
 
     @router.callback_query(lambda call: call.data == "u:stats")
     async def stats_callback(callback: CallbackQuery) -> None:
-        text = await _stats_text(session_factory, callback.from_user.id, settings)
-        await callback.message.edit_text(text, reply_markup=main_menu_keyboard())
-        await callback.answer()
+        try:
+            text = await _stats_text(session_factory, callback.from_user.id, settings)
+            await callback.message.edit_text(text, reply_markup=main_menu_keyboard())
+            await callback.answer()
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                await callback.answer("Статистика вже відкрита")
+                return
+            logger.exception("Could not render stats for telegram_id=%s", callback.from_user.id)
+            await callback.answer("Не вдалося відкрити статистику. Помилка записана в логи.", show_alert=True)
+        except Exception:
+            logger.exception("Could not render stats for telegram_id=%s", callback.from_user.id)
+            await callback.answer("Не вдалося відкрити статистику. Помилка записана в логи.", show_alert=True)
 
     @router.callback_query(lambda call: call.data == "u:topwins")
     async def topwins_callback(callback: CallbackQuery) -> None:
@@ -1465,8 +1476,8 @@ async def _stats_text(
     open_stakes = sum(bet.stake_cents for bet in open_bets) + sum(express.stake_cents for express in open_express_bets)
     bankroll = user.balance_cents + open_stakes
     profit = bankroll - settings.starting_balance_cents
-    best_single_profit = (bet.payout_cents - bet.stake_cents for bet in won)
-    best_express_profit = (express.payout_cents - express.stake_cents for express in won_express)
+    best_single_profit = (_settled_profit_cents(bet) for bet in won)
+    best_express_profit = (_settled_profit_cents(express) for express in won_express)
     best_profit = max(*best_single_profit, *best_express_profit, 0)
     logger.debug(
         "Built stats: telegram_id=%s single_bets=%s express_bets=%s open_stakes=%s",
@@ -1487,6 +1498,16 @@ async def _stats_text(
         f"Win rate: {win_rate}%\n"
         f"Найкращий чистий виграш: {_profit_text(best_profit)}"
     )
+
+
+def _settled_profit_cents(entry) -> int:
+    payout = getattr(entry, "payout_cents", None)
+    if payout is None:
+        payout = getattr(entry, "potential_payout_cents", None)
+    if payout is None:
+        locked_odds = getattr(entry, "locked_decimal_odds", None)
+        payout = payout_cents(entry.stake_cents, Decimal(locked_odds)) if locked_odds is not None else 0
+    return int(payout) - entry.stake_cents
 
 
 async def _topwins_text(session_factory: async_sessionmaker[AsyncSession]) -> str:
