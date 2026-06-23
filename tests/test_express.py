@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.bot.handlers import _settled_profit_cents, _stats_text
+from app.bot.handlers import _mybets_text, _settled_profit_cents, _stats_text
 from app.models import BetStatus, ExpressBet, ExpressBetItem, Market, MarketType, Match, OddsSnapshot, User
 from app.services.betting import (
     add_to_bet_slip,
@@ -186,6 +186,23 @@ async def test_stats_text_shows_average_odds_and_win_loss_totals(session_factory
     assert "Середній програш: -$5.00" in text
     assert "Виграно всього: +$20.00" in text
     assert "Програно всього: -$5.00" in text
+
+
+async def test_my_bets_text_includes_open_express_bets(session_factory, settings):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        first = await _seed_open_odds(session, "match-mybets-express-a", "Brazil", "Japan", "Brazil", Decimal("2.00"))
+        second = await _seed_open_odds(session, "match-mybets-express-b", "France", "Iraq", "France", Decimal("1.50"))
+        await add_to_bet_slip(session, user.telegram_id, first.id, settings)
+        await add_to_bet_slip(session, user.telegram_id, second.id, settings)
+        await place_express_bet(session, user.telegram_id, 1000, settings)
+        await session.commit()
+
+    text = await _mybets_text(session_factory, user.telegram_id)
+
+    assert "🧾 Експрес #" in text
+    assert "Загальний кеф: 3.00" in text
+    assert "Можливий виграш: $30.00" in text
 
 
 def test_settled_profit_uses_fallback_when_payout_is_missing():

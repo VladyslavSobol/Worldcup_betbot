@@ -1196,18 +1196,28 @@ async def _mybets_view(
             .where(Bet.user_id == user.id)
             .options(selectinload(Bet.market).selectinload(Market.match))
         )
+        express_statement = (
+            select(ExpressBet)
+            .where(ExpressBet.user_id == user.id)
+            .options(
+                selectinload(ExpressBet.items).selectinload(ExpressBetItem.match),
+                selectinload(ExpressBet.items).selectinload(ExpressBetItem.market),
+            )
+        )
         if status_filter == "void":
             statement = statement.where(Bet.status.in_([BetStatus.void, BetStatus.push]))
+            express_statement = express_statement.where(ExpressBet.status.in_([BetStatus.void, BetStatus.push]))
         elif status_filter != "all":
             statement = statement.where(Bet.status == BetStatus(status_filter))
-        bets = (
-            await session.scalars(
-                statement.order_by(Bet.created_at.desc()).offset(offset).limit(MY_BETS_PER_PAGE + 1)
-            )
-        ).all()
+            express_statement = express_statement.where(ExpressBet.status == BetStatus(status_filter))
+        bets = (await session.scalars(statement)).all()
+        express_bets = (await session.scalars(express_statement)).all()
 
-    has_next = len(bets) > MY_BETS_PER_PAGE
-    page_bets = bets[:MY_BETS_PER_PAGE]
+    entries = [("single", bet) for bet in bets] + [("express", express) for express in express_bets]
+    entries.sort(key=lambda entry: entry[1].created_at, reverse=True)
+    page_entries = entries[offset : offset + MY_BETS_PER_PAGE + 1]
+    has_next = len(page_entries) > MY_BETS_PER_PAGE
+    visible_entries = page_entries[:MY_BETS_PER_PAGE]
     empty = {
         "open": "Поки що відкритих ставок немає.",
         "won": "Поки що виграних ставок немає.",
@@ -1215,7 +1225,7 @@ async def _mybets_view(
         "void": "Поки що повернених ставок немає.",
         "all": "Поки що ставок немає.",
     }
-    if not page_bets:
+    if not visible_entries:
         return (
             format_bets_list(
                 f"🎟 Мої ставки · {_mybets_filter_title(status_filter)}",
@@ -1231,7 +1241,12 @@ async def _mybets_view(
     return (
         format_bets_list(
             title,
-            [format_single_bet_card(bet) for bet in page_bets],
+            [
+                format_single_bet_card(entry)
+                if entry_type == "single"
+                else format_express_bet_card(entry)
+                for entry_type, entry in visible_entries
+            ],
             "Ставок немає.",
         ),
         mybets_filter_keyboard(status_filter, page, page > 0, has_next),
