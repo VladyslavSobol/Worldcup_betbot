@@ -17,11 +17,14 @@ from app.bot.formatting import (
     format_bets_list,
     format_decimal,
     format_express_bet_card,
+    format_leaderboard,
     format_market_selection,
     format_match_pair,
     format_money,
     format_odds,
+    format_profit,
     format_single_bet_card,
+    format_top_wins,
     market_title,
     match_line,
     match_title,
@@ -1360,22 +1363,25 @@ async def _topwins_text(session_factory: async_sessionmaker[AsyncSession]) -> st
                     selectinload(Bet.market).selectinload(Market.match),
                 )
                 .order_by((Bet.payout_cents - Bet.stake_cents).desc())
-                .limit(10)
+                .limit(5)
             )
         ).all()
-    if not bets:
-        return "💎 Топ виграшів ще порожній."
+        express_bets = (
+            await session.scalars(
+                select(ExpressBet)
+                .where(ExpressBet.status == BetStatus.won)
+                .options(
+                    selectinload(ExpressBet.user),
+                    selectinload(ExpressBet.items),
+                )
+                .order_by((ExpressBet.payout_cents - ExpressBet.stake_cents).desc())
+                .limit(5)
+            )
+        ).all()
 
-    lines = ["💎 Топ виграшів", ""]
-    for index, bet in enumerate(bets, start=1):
-        profit = bet.payout_cents - bet.stake_cents
-        lines.append(
-            f"{index}. {user_label(bet.user)} — {_profit_text(profit)} чистими\n"
-            f"{match_title(bet.market.match)}\n"
-            f"{_market_name(bet.market)} · {bet.selection} @ {format_decimal(bet.locked_decimal_odds)} · "
-            f"{format_cents(bet.stake_cents)} → {format_cents(bet.payout_cents)}"
-        )
-    return "\n\n".join(lines)
+    entries = list(bets) + list(express_bets)
+    entries.sort(key=lambda entry: entry.payout_cents - entry.stake_cents, reverse=True)
+    return format_top_wins(entries, limit=5)
 
 
 async def _leaderboard_text(
@@ -1385,26 +1391,11 @@ async def _leaderboard_text(
     async with session_factory() as session:
         rows = await leaderboard(session)
     logger.debug("Built leaderboard: rows=%s", len(rows))
-    if not rows:
-        return "Поки немає гравців."
-
-    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    lines = ["🏆 Лідерборд", "Банкрол = доступно + відкриті ставки", ""]
-    for index, (user, open_stakes, bankroll) in enumerate(rows, start=1):
-        place = medals.get(index, f"{index}.")
-        profit = bankroll - settings.starting_balance_cents
-        lines.append(
-            f"{place} {user_label(user)} — банкрол {format_cents(bankroll)} | "
-            f"доступно {format_cents(user.balance_cents)} | відкрито {format_cents(open_stakes)} | "
-            f"± {_profit_text(profit)}"
-        )
-    return "\n".join(lines)
+    return format_leaderboard(rows, settings.starting_balance_cents, limit=5)
 
 
 def _profit_text(cents: int) -> str:
-    if cents > 0:
-        return f"+{format_cents(cents)}"
-    return format_cents(cents)
+    return format_profit(cents)
 
 def _help_text() -> str:
     return (

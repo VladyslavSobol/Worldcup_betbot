@@ -311,6 +311,12 @@ def format_money(cents: int) -> str:
     return format_cents(cents)
 
 
+def format_profit(cents: int) -> str:
+    if cents > 0:
+        return f"+{format_money(cents)}"
+    return format_money(cents)
+
+
 def format_odds(value) -> str:
     return f"{float(value):.2f}"
 
@@ -400,6 +406,104 @@ def format_bets_list(title: str, cards: list[str], empty_text: str) -> str:
     if not cards:
         return f"{title}\n\n{empty_text}"
     return f"{title}\n\n" + f"\n\n{CARD_SEPARATOR}\n\n".join(cards)
+
+
+def format_leaderboard(
+    rows,
+    starting_balance_cents: int,
+    limit: int = 5,
+) -> str:
+    page_rows = list(rows)[:limit]
+    if not page_rows:
+        return "🏆 Лідерборд\n\nПоки що немає гравців для лідерборду."
+
+    blocks = [
+        format_leaderboard_entry(index, user, open_stakes, bankroll, starting_balance_cents)
+        for index, (user, open_stakes, bankroll) in enumerate(page_rows, start=1)
+    ]
+    return "🏆 Лідерборд\n\nБанкрол = баланс + відкриті ставки\n\n" + "\n\n".join(blocks)
+
+
+def format_leaderboard_entry(
+    rank: int,
+    user: User,
+    open_stakes_cents: int,
+    bankroll_cents: int,
+    starting_balance_cents: int,
+) -> str:
+    place = _rank_label(rank)
+    indent = "" if rank <= 3 else "   "
+    profit = bankroll_cents - starting_balance_cents
+    return "\n".join(
+        [
+            f"{place} {user_label(user)}",
+            f"{indent}💰 Банкрол: {format_money(bankroll_cents)}",
+            f"{indent}💵 Баланс: {format_money(user.balance_cents)}",
+            f"{indent}🎟 Відкрито: {format_money(open_stakes_cents)}",
+            f"{indent}📊 Профіт: {format_profit(profit)}",
+        ]
+    )
+
+
+def format_top_wins(entries, limit: int = 5) -> str:
+    page_entries = list(entries)[:limit]
+    if not page_entries:
+        return "💎 Топ виграшів\n\nПоки що виграних ставок немає."
+
+    blocks = [
+        format_top_win_entry(index, entry)
+        for index, entry in enumerate(page_entries, start=1)
+    ]
+    return "💎 Топ виграшів\n\n" + "\n\n━━━━━━━━━━━━\n\n".join(blocks)
+
+
+def format_top_win_entry(rank: int, entry) -> str:
+    if hasattr(entry, "items") and not hasattr(entry, "match_id"):
+        return _format_top_express_win_entry(rank, entry)
+    return _format_top_single_win_entry(rank, entry)
+
+
+def _format_top_single_win_entry(rank: int, bet: Bet) -> str:
+    match = bet.market.match if bet.market else None
+    profit = bet.payout_cents - bet.stake_cents
+    lines = [
+        f"{_rank_label(rank)} {user_label(bet.user)}",
+        f"💸 Чистий виграш: {format_profit(profit)}",
+    ]
+    if match:
+        lines.append(format_match_pair(match))
+    else:
+        lines.append(f"Матч #{bet.match_id}")
+    lines.extend(
+        [
+            f"📌 {format_market_selection(bet.market, bet.selection)}",
+            f"📈 Кеф: {format_odds(bet.locked_decimal_odds)}",
+            f"💵 {format_money(bet.stake_cents)} → {format_money(bet.payout_cents)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _format_top_express_win_entry(rank: int, express_bet) -> str:
+    profit = express_bet.payout_cents - express_bet.stake_cents
+    items = list(getattr(express_bet, "items", []) or [])
+    lines = []
+    if getattr(express_bet, "user", None):
+        lines.append(f"{_rank_label(rank)} {user_label(express_bet.user)}")
+    lines.extend(
+        [
+            f"🧾 Експрес #{express_bet.id}",
+            f"💸 Чистий виграш: {format_profit(profit)}",
+            f"📈 Загальний кеф: {format_odds(express_bet.total_odds)}",
+            f"💵 {format_money(express_bet.stake_cents)} → {format_money(express_bet.payout_cents)}",
+            f"Подій: {len(items)}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _rank_label(rank: int) -> str:
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"{rank}.")
 
 
 def _market_label(market) -> str:

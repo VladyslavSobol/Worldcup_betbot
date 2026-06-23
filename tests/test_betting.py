@@ -6,8 +6,8 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import delete, select
 
-from app.bot.handlers import _leaderboard_text, _openbets_text
-from app.models import Bet, BetStatus, Market, MarketType, Match, MatchStatus, OddsSnapshot, User
+from app.bot.handlers import _leaderboard_text, _openbets_text, _topwins_text
+from app.models import Bet, BetStatus, ExpressBet, Market, MarketType, Match, MatchStatus, OddsSnapshot, User
 from app.services.betting import (
     BettingError,
     get_or_create_user,
@@ -142,19 +142,82 @@ async def test_leaderboard_text_uses_compact_medal_format(session_factory, setti
         first = await get_or_create_user(session, 1, "first", "First", settings)
         second = await get_or_create_user(session, 2, "second", "Second", settings)
         third = await get_or_create_user(session, 3, "third", "Third", settings)
+        fourth = await get_or_create_user(session, 4, "fourth", "Fourth", settings)
+        fifth = await get_or_create_user(session, 5, "fifth", "Fifth", settings)
+        sixth = await get_or_create_user(session, 6, "sixth", "Sixth", settings)
         odds = await _seed_open_odds(session)
         await place_bet(session, first.telegram_id, odds.id, 2500, settings)
-        second.balance_cents = 9900
-        third.balance_cents = 9800
+        second.balance_cents = 10900
+        third.balance_cents = 10600
+        fourth.balance_cents = 10200
+        fifth.balance_cents = 9500
+        sixth.balance_cents = 9400
         await session.commit()
 
     text = await _leaderboard_text(session_factory, settings)
 
-    assert "🏆 Лідерборд" in text
-    assert "Банкрол = доступно + відкриті ставки" in text
-    assert "🥇 first — банкрол $100.00 | доступно $75.00 | відкрито $25.00 | ± $0.00" in text
-    assert "🥈 second" in text
-    assert "🥉 third" in text
+    assert text.startswith("🏆 Лідерборд\n\nБанкрол = баланс + відкриті ставки")
+    assert "🥇 second\n💰 Банкрол: $109.00\n💵 Баланс: $109.00\n🎟 Відкрито: $0.00\n📊 Профіт: +$9.00" in text
+    assert "🥈 third" in text
+    assert "🥉 fourth" in text
+    assert "4. first" in text
+    assert "5. fifth" in text
+    assert "sixth" not in text
+    assert " | " not in text
+
+
+async def test_leaderboard_text_empty_state(session_factory, settings):
+    text = await _leaderboard_text(session_factory, settings)
+
+    assert text == "🏆 Лідерборд\n\nПоки що немає гравців для лідерборду."
+
+
+async def test_topwins_text_uses_compact_blocks_for_single_and_express_wins(session_factory, settings):
+    async with session_factory() as session:
+        first = await get_or_create_user(session, 1, "first", "First", settings)
+        second = await get_or_create_user(session, 2, "second", "Second", settings)
+        odds = await _seed_open_odds(session, selection="Brazil", price=Decimal("1.40"))
+        single = Bet(
+            user_id=first.id,
+            match_id=odds.market.match_id,
+            market_id=odds.market_id,
+            odds_snapshot_id=odds.id,
+            selection="Brazil",
+            stake_cents=2500,
+            locked_decimal_odds=Decimal("1.400"),
+            status=BetStatus.won,
+            payout_cents=3500,
+        )
+        express = ExpressBet(
+            user_id=second.id,
+            stake_cents=500,
+            total_odds=Decimal("1.200"),
+            potential_payout_cents=600,
+            status=BetStatus.won,
+            payout_cents=600,
+        )
+        session.add_all([single, express])
+        await session.commit()
+
+    text = await _topwins_text(session_factory)
+
+    assert text.startswith("💎 Топ виграшів")
+    assert "🥇 first\n💸 Чистий виграш: +$10.00" in text
+    assert "🇧🇷 Brazil — 🇯🇵 Japan" in text
+    assert "📌 1X2: Brazil" in text
+    assert "📈 Кеф: 1.40" in text
+    assert "💵 $25.00 → $35.00" in text
+    assert "━━━━━━━━━━━━" in text
+    assert "🧾 Експрес #" in text
+    assert "📈 Загальний кеф: 1.20" in text
+    assert "Подій: 0" in text
+    assert " | " not in text
+
+
+async def test_topwins_text_empty_state(session_factory):
+    text = await _topwins_text(session_factory)
+
+    assert text == "💎 Топ виграшів\n\nПоки що виграних ставок немає."
 
 
 async def test_openbets_text_uses_continuous_display_numbers_after_deleted_bets(
