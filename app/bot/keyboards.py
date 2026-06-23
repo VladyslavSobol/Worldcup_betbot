@@ -212,8 +212,17 @@ def selected_odds_keyboard(odds_id: int, match_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def express_coupon_keyboard(can_place: bool, has_items: bool) -> InlineKeyboardMarkup:
+def express_coupon_keyboard(
+    can_place: bool,
+    has_items: bool,
+    removable_items: list[tuple[int, str]] | None = None,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    if removable_items:
+        for item_id, label in removable_items:
+            rows.append(
+                [InlineKeyboardButton(text=f"❌ Прибрати {label}", callback_data=f"x:remove:{item_id}")]
+            )
     if can_place:
         rows.append(
             [
@@ -254,5 +263,3 @@ def confirm_express_keyboard(stake_cents: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⬅️ Змінити суму", callback_data="x:stake")],
         ]
     )
-
-

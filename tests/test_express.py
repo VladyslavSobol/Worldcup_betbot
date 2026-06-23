@@ -12,8 +12,10 @@ from app.services.betting import (
     add_to_bet_slip,
     calculate_express_payout,
     calculate_express_total_odds,
+    get_bet_slip,
     leaderboard,
     place_express_bet,
+    remove_from_bet_slip,
     settle_match,
     void_match,
 )
@@ -144,6 +146,26 @@ async def test_stats_text_counts_settled_express_bets(session_factory, settings)
     assert "Відкриті: 0 · виграні: 1 · програні: 0 · void/push: 0" in text
     assert "Win rate: 100%" in text
     assert "Найкращий чистий виграш: +$20.00" in text
+
+
+async def test_remove_from_bet_slip_removes_only_selected_item(session_factory, settings):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        first = await _seed_open_odds(session, "match-remove-a", "Brazil", "Japan", "Brazil", Decimal("2.00"))
+        second = await _seed_open_odds(session, "match-remove-b", "France", "Iraq", "France", Decimal("1.50"))
+        await add_to_bet_slip(session, user.telegram_id, first.id, settings)
+        slip = await add_to_bet_slip(session, user.telegram_id, second.id, settings)
+
+        first_item = next(item for item in slip.items if item.match_id == first.market.match_id)
+        updated = await remove_from_bet_slip(session, user.telegram_id, first_item.id)
+        await session.commit()
+
+        refreshed = await get_bet_slip(session, user.telegram_id)
+
+    assert updated is not None
+    assert len(updated.items) == 1
+    assert len(refreshed.items) == 1
+    assert refreshed.items[0].match_id == second.market.match_id
 
 
 async def _seed_user(session, telegram_id: int = 10, username: str = "friend") -> User:

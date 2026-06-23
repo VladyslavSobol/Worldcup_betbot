@@ -64,6 +64,7 @@ from app.services.betting import (
     leaderboard,
     place_bet,
     place_express_bet,
+    remove_from_bet_slip,
     reset_test_state,
     reset_user_state,
     settle_match,
@@ -453,7 +454,11 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
             )
             await callback.message.edit_text(
                 _bet_slip_added_text(slip),
-                reply_markup=express_coupon_keyboard(item_count >= 2, item_count > 0),
+                reply_markup=express_coupon_keyboard(
+                    item_count >= 2,
+                    item_count > 0,
+                    _bet_slip_remove_buttons(slip),
+                ),
             )
             await callback.answer("✅ Додано в експрес")
         except BettingError as exc:
@@ -485,6 +490,29 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
         text, keyboard = await _bet_slip_view(session_factory, callback.from_user.id)
         await callback.message.edit_text(text, reply_markup=keyboard)
         await callback.answer("Купон очищено")
+
+    @router.callback_query(lambda call: call.data and call.data.startswith("x:remove:"))
+    async def remove_express_item_callback(callback: CallbackQuery) -> None:
+        if _is_group_chat(callback.message.chat):
+            await callback.answer("Купон доступний у приваті з ботом.", show_alert=True)
+            return
+        try:
+            item_id = int(callback.data.split(":")[2])
+            async with session_factory() as session:
+                slip = await remove_from_bet_slip(session, callback.from_user.id, item_id)
+                await session.commit()
+            item_count = len(slip.items) if slip else 0
+            await callback.message.edit_text(
+                _bet_slip_text(slip),
+                reply_markup=express_coupon_keyboard(
+                    item_count >= 2,
+                    item_count > 0,
+                    _bet_slip_remove_buttons(slip),
+                ),
+            )
+            await callback.answer("Вибір прибрано з експресу")
+        except (ValueError, BettingError) as exc:
+            await callback.answer(str(exc), show_alert=True)
 
     @router.callback_query(lambda call: call.data == "x:stake")
     async def express_stake_callback(callback: CallbackQuery) -> None:
@@ -996,7 +1024,7 @@ async def _bet_slip_view(
         getattr(slip, "id", None),
         len(slip.items) if slip else 0,
     )
-    return _bet_slip_text(slip), express_coupon_keyboard(can_place, has_items)
+    return _bet_slip_text(slip), express_coupon_keyboard(can_place, has_items, _bet_slip_remove_buttons(slip))
 
 
 def _bet_slip_added_text(slip) -> str:
@@ -1033,6 +1061,12 @@ def _bet_slip_text(slip) -> str:
     if len(slip.items) < 2:
         lines.append("Для експресу потрібно мінімум 2 події.")
     return "\n".join(lines).strip()
+
+
+def _bet_slip_remove_buttons(slip) -> list[tuple[int, str]]:
+    if not slip or not slip.items:
+        return []
+    return [(item.id, str(index)) for index, item in enumerate(slip.items, start=1)]
 
 
 async def _express_stake_view(

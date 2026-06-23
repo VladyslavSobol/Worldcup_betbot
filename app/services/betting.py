@@ -190,6 +190,34 @@ async def clear_bet_slip(session: AsyncSession, telegram_id: int) -> int:
     return count
 
 
+async def remove_from_bet_slip(
+    session: AsyncSession,
+    telegram_id: int,
+    item_id: int,
+) -> BetSlip | None:
+    user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    if not user:
+        raise BettingError("Спочатку натисни /start.")
+
+    slip = await session.scalar(
+        select(BetSlip)
+        .where(BetSlip.user_id == user.id)
+        .options(selectinload(BetSlip.items))
+    )
+    if not slip or not slip.items:
+        raise BettingError("Купон порожній.")
+
+    item = next((item for item in slip.items if item.id == item_id), None)
+    if not item:
+        raise BettingError("Такого вибору в експресі немає.")
+
+    await session.delete(item)
+    slip.updated_at = utcnow()
+    await session.flush()
+    session.expire(slip, ["items"])
+    return await get_bet_slip(session, telegram_id)
+
+
 async def place_express_bet(
     session: AsyncSession,
     telegram_id: int,
