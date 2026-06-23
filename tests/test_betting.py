@@ -10,15 +10,17 @@ from app.bot.handlers import _leaderboard_text, _openbets_text, _topwins_text
 from app.models import Bet, BetStatus, ExpressBet, Market, MarketType, Match, MatchStatus, OddsSnapshot, User
 from app.services.betting import (
     BettingError,
+    add_to_bet_slip,
     get_or_create_user,
     leaderboard,
     place_bet,
+    place_express_bet,
     reset_test_state,
     reset_user_state,
     settle_match,
     void_match,
 )
-from app.services.sync import sync_scores
+from app.services.sync import sync_scores, sync_scores_with_results
 
 
 async def test_user_gets_starting_balance(session_factory, settings):
@@ -321,6 +323,63 @@ async def test_sync_scores_settles_completed_api_match(session_factory, settings
     assert match.status == MatchStatus.finished
     assert bet.status == BetStatus.won
     assert refreshed.balance_cents == 11500
+
+
+async def test_sync_scores_with_results_returns_settled_bet_targets(session_factory, settings):
+    class FakeScoresClient:
+        async def find_worldcup_sport_key(self):
+            return "soccer_fifa_world_cup"
+
+        async def fetch_scores(self, sport_key):
+            return [
+                {
+                    "id": "match-score-results-a",
+                    "completed": True,
+                    "scores": [
+                        {"name": "Brazil", "score": "2"},
+                        {"name": "Japan", "score": "1"},
+                    ],
+                },
+                {
+                    "id": "match-score-results-b",
+                    "completed": True,
+                    "scores": [
+                        {"name": "France", "score": "1"},
+                        {"name": "Iraq", "score": "0"},
+                    ],
+                },
+            ]
+
+    async with session_factory() as session:
+        single_user = await get_or_create_user(session, 10, "single", "Single", settings)
+        express_user = await get_or_create_user(session, 20, "express", "Express", settings)
+        first = await _seed_open_odds(
+            session,
+            selection="Brazil",
+            price=Decimal("2.00"),
+            api_id="match-score-results-a",
+        )
+        second = await _seed_open_odds(
+            session,
+            selection="France",
+            price=Decimal("1.50"),
+            api_id="match-score-results-b",
+        )
+        second.market.match.home_team = "France"
+        second.market.match.away_team = "Iraq"
+        await place_bet(session, single_user.telegram_id, first.id, 1000, settings)
+        await add_to_bet_slip(session, express_user.telegram_id, first.id, settings)
+        await add_to_bet_slip(session, express_user.telegram_id, second.id, settings)
+        express = await place_express_bet(session, express_user.telegram_id, 500, settings)
+
+        results = await sync_scores_with_results(session, FakeScoresClient())
+        await session.commit()
+
+    assert [result.match_id for result in results] == [first.market.match_id, second.market.match_id]
+    assert results[0].home_goals == 2
+    assert results[0].away_goals == 1
+    assert results[0].single_bet_ids
+    assert express.id in results[0].express_bet_ids
 
 
 async def _seed_open_odds(

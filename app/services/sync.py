@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.odds_api import OddsApiClient, OddsEvent, OddsOutcome
-from app.models import Market, MarketStatus, MarketType, Match, MatchStatus, OddsSnapshot, utcnow
+from app.models import Bet, BetStatus, ExpressBetItem, Market, MarketStatus, MarketType, Match, MatchStatus, OddsSnapshot, utcnow
 from app.services.betting import settle_match
+
+
+@dataclass(frozen=True)
+class ScoreSettlementResult:
+    match_id: int
+    home_goals: int
+    away_goals: int
+    settled_count: int
+    single_bet_ids: list[int]
+    express_bet_ids: list[int]
 
 
 async def sync_odds(session: AsyncSession, client: OddsApiClient, sport_key: str | None = None) -> int:
@@ -22,12 +33,21 @@ async def sync_odds(session: AsyncSession, client: OddsApiClient, sport_key: str
 
 
 async def sync_scores(session: AsyncSession, client: OddsApiClient, sport_key: str | None = None) -> int:
+    results = await sync_scores_with_results(session, client, sport_key)
+    return len(results)
+
+
+async def sync_scores_with_results(
+    session: AsyncSession,
+    client: OddsApiClient,
+    sport_key: str | None = None,
+) -> list[ScoreSettlementResult]:
     selected_sport_key = sport_key or await client.find_worldcup_sport_key()
     if not selected_sport_key:
-        return 0
+        return []
 
     events = await client.fetch_scores(selected_sport_key)
-    settled = 0
+    results = []
     for event in events:
         if not event.get("completed"):
             continue
@@ -41,9 +61,41 @@ async def sync_scores(session: AsyncSession, client: OddsApiClient, sport_key: s
         score_map = _score_map(event)
         if match.home_team not in score_map or match.away_team not in score_map:
             continue
-        await settle_match(session, match.id, score_map[match.home_team], score_map[match.away_team])
-        settled += 1
-    return settled
+        single_bet_ids, express_bet_ids = await _open_settlement_target_ids(session, match.id)
+        home_goals = score_map[match.home_team]
+        away_goals = score_map[match.away_team]
+        settled_count = await settle_match(session, match.id, home_goals, away_goals)
+        results.append(
+            ScoreSettlementResult(
+                match_id=match.id,
+                home_goals=home_goals,
+                away_goals=away_goals,
+                settled_count=settled_count,
+                single_bet_ids=single_bet_ids,
+                express_bet_ids=express_bet_ids,
+            )
+        )
+    return results
+
+
+async def _open_settlement_target_ids(
+    session: AsyncSession,
+    match_id: int,
+) -> tuple[list[int], list[int]]:
+    single_bet_ids = (
+        await session.scalars(
+            select(Bet.id).where(Bet.match_id == match_id, Bet.status == BetStatus.open)
+        )
+    ).all()
+    express_bet_ids = (
+        await session.scalars(
+            select(ExpressBetItem.express_bet_id).where(
+                ExpressBetItem.match_id == match_id,
+                ExpressBetItem.status == BetStatus.open,
+            )
+        )
+    ).all()
+    return list(single_bet_ids), list(dict.fromkeys(express_bet_ids))
 
 
 async def upsert_event_odds(session: AsyncSession, event: OddsEvent) -> int:
