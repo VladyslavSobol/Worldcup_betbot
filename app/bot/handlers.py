@@ -1476,9 +1476,11 @@ async def _stats_text(
     open_stakes = sum(bet.stake_cents for bet in open_bets) + sum(express.stake_cents for express in open_express_bets)
     bankroll = user.balance_cents + open_stakes
     profit = bankroll - settings.starting_balance_cents
-    best_single_profit = (_settled_profit_cents(bet) for bet in won)
-    best_express_profit = (_settled_profit_cents(express) for express in won_express)
-    best_profit = max(*best_single_profit, *best_express_profit, 0)
+    best_profits = [
+        *(_settled_profit_cents(bet) for bet in won),
+        *(_settled_profit_cents(express) for express in won_express),
+    ]
+    best_profit = max(best_profits, default=0)
     logger.debug(
         "Built stats: telegram_id=%s single_bets=%s express_bets=%s open_stakes=%s",
         telegram_id,

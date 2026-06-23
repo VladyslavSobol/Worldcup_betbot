@@ -149,6 +149,19 @@ async def test_stats_text_counts_settled_express_bets(session_factory, settings)
     assert "Найкращий чистий виграш: +$20.00" in text
 
 
+async def test_stats_text_handles_user_without_wins(session_factory, settings):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        odds = await _seed_open_odds(session, "match-stats-open-only", "Brazil", "Japan", "Brazil", Decimal("2.00"))
+        await add_to_bet_slip(session, user.telegram_id, odds.id, settings)
+        await session.commit()
+
+    text = await _stats_text(session_factory, user.telegram_id, settings)
+
+    assert "Ставок всього: 0" in text
+    assert "Найкращий чистий виграш: $0.00" in text
+
+
 def test_settled_profit_uses_fallback_when_payout_is_missing():
     single = SimpleNamespace(
         stake_cents=1000,
