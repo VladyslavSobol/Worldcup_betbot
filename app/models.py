@@ -36,6 +36,7 @@ class MatchStatus(str, enum.Enum):
 
 class MarketType(str, enum.Enum):
     h2h = "h2h"
+    double_chance = "double_chance"
     totals = "totals"
     spreads = "spreads"
     btts = "btts"

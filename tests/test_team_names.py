@@ -33,3 +33,12 @@ def test_match_list_deduplication_prefers_current_provider_row():
     )
 
     assert _dedupe_matches([duplicate, old]) == [duplicate]
+
+
+def test_additional_provider_team_aliases():
+    assert canonical_team_name("Turkiye") == canonical_team_name("Turkey")
+    assert canonical_team_name("Türkiye") == canonical_team_name("Turkey")
+    assert canonical_team_name("Korea Republic") == canonical_team_name("South Korea")
+    assert canonical_team_name("Bosnia & Herzegovina") == canonical_team_name(
+        "Bosnia and Herzegovina"
+    )

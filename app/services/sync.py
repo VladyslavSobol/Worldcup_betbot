@@ -181,6 +181,7 @@ async def _get_or_create_market(
 def _market_type(key: str) -> MarketType | None:
     mapping = {
         "h2h": MarketType.h2h,
+        "double_chance": MarketType.double_chance,
         "totals": MarketType.totals,
         "spreads": MarketType.spreads,
         "btts": MarketType.btts,

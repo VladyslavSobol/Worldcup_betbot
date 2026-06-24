@@ -21,6 +21,7 @@ BET_STATUS_UA = {
 
 MARKET_TYPE_UA = {
     MarketType.h2h: "1X2",
+    MarketType.double_chance: "Подвійний шанс",
     MarketType.totals: "Тотал",
     MarketType.spreads: "Фора",
     MarketType.btts: "Обидві заб’ють",
@@ -179,6 +180,8 @@ def team_code(name: str | None) -> str:
 
 def selection_icon(selection: str, match: Match | None = None) -> str:
     normalized = selection.lower().strip()
+    if normalized in {"1x", "x2"}:
+        return "🛡"
     if normalized == "draw":
         return "🤝"
     if normalized.startswith("over"):
@@ -200,6 +203,10 @@ def selection_icon(selection: str, match: Match | None = None) -> str:
 
 def selection_label(selection: str) -> str:
     normalized = selection.lower().strip()
+    if normalized == "1x":
+        return "П1 або нічия"
+    if normalized == "x2":
+        return "П2 або нічия"
     if normalized == "draw":
         return "Нічия"
     if normalized.startswith("over"):
@@ -217,6 +224,10 @@ def selection_label(selection: str) -> str:
 
 def compact_selection_label(selection: str, match: Match | None = None) -> str:
     normalized = selection.lower().strip()
+    if normalized == "1x":
+        return "П1 або нічия"
+    if normalized == "x2":
+        return "П2 або нічия"
     if normalized == "draw":
         return "X"
     if normalized.startswith("over"):
@@ -263,9 +274,18 @@ def market_title(odds: OddsSnapshot) -> str:
 def market_block_title(block: list[OddsSnapshot]) -> str:
     if not block:
         return ""
-    if block[0].market.type == MarketType.spreads:
+    market_type = block[0].market.type
+    if market_type == MarketType.h2h:
+        return "🏆 Результат матчу"
+    if market_type == MarketType.double_chance:
+        return "🛡 Подвійний шанс"
+    if market_type == MarketType.totals:
+        return f"⚽ {market_title(block[0])}"
+    if market_type == MarketType.spreads:
         line = abs(block[0].market.line or 0)
-        return f"Фора ±{format_decimal(line)}"
+        return f"📏 Фора +{format_decimal(line)} / -{format_decimal(line)}"
+    if market_type == MarketType.btts:
+        return "🥅 Обидві заб’ють"
     return market_title(block[0])
 
 

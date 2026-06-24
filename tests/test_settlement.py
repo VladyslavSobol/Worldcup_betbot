@@ -109,3 +109,26 @@ def test_btts_yes_wins_when_both_teams_score():
 def test_btts_no_wins_when_one_team_does_not_score():
     result = settle_selection(MarketType.btts, "No", "Brazil", "Japan", 3, 0)
     assert result.status == BetStatus.won
+
+
+@pytest.mark.parametrize(
+    ("selection", "home_score", "away_score", "expected"),
+    [
+        ("1X", 2, 0, BetStatus.won),
+        ("1X", 1, 1, BetStatus.won),
+        ("1X", 0, 1, BetStatus.lost),
+        ("X2", 0, 2, BetStatus.won),
+        ("X2", 1, 1, BetStatus.won),
+        ("X2", 2, 1, BetStatus.lost),
+    ],
+)
+def test_double_chance_settlement(selection, home_score, away_score, expected):
+    result = settle_selection(
+        MarketType.double_chance,
+        selection,
+        "Brazil",
+        "Japan",
+        home_score,
+        away_score,
+    )
+    assert result.status == expected

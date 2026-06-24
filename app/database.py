@@ -18,6 +18,7 @@ async def init_db(session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if engine.dialect.name == "postgresql":
-            await conn.execute(
-                text("ALTER TYPE markettype ADD VALUE IF NOT EXISTS 'btts'")
-            )
+            for value in ("btts", "double_chance"):
+                await conn.execute(
+                    text(f"ALTER TYPE markettype ADD VALUE IF NOT EXISTS '{value}'")
+                )

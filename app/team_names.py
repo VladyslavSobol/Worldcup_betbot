@@ -4,12 +4,15 @@ import unicodedata
 
 
 ALIASES = {
+    "bosnia & herzegovina": "bosnia and herzegovina",
     "civ": "ivory coast",
     "congo dr": "dr congo",
     "cuw": "curacao",
     "czechia": "czech republic",
     "kor": "south korea",
+    "korea republic": "south korea",
     "rsa": "south africa",
+    "turkiye": "turkey",
 }
 
 

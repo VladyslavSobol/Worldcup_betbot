@@ -27,6 +27,14 @@ def settle_selection(
         winner = _h2h_winner(home_team, away_team, home_score, away_score)
         return _status(selection == winner)
 
+    if market_type == MarketType.double_chance:
+        normalized = selection.upper()
+        if normalized == "1X":
+            return _status(home_score >= away_score)
+        if normalized == "X2":
+            return _status(away_score >= home_score)
+        raise ValueError(f"Unsupported double chance selection: {selection}")
+
     if market_type == MarketType.totals:
         if line is None:
             raise ValueError("Totals settlement requires a line")

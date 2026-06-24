@@ -108,7 +108,7 @@ def _parse_market(
         key = "h2h"
     elif name == "Spread":
         key = "spreads"
-        selected_rows = _closest_rows(rows, Decimal("0"))
+        selected_rows = _balanced_rows(rows, "home", "away")
         for row in selected_rows:
             point = _decimal(row.get("hdp"))
             if point is None:
@@ -121,7 +121,7 @@ def _parse_market(
             )
     elif name == "Totals":
         key = "totals"
-        selected_rows = _closest_rows(rows, Decimal("2.5"))
+        selected_rows = _balanced_rows(rows, "over", "under")
         for row in selected_rows:
             point = _decimal(row.get("hdp"))
             if point is None:
@@ -132,6 +132,13 @@ def _parse_market(
                     _outcome("Under", row.get("under"), point),
                 ]
             )
+    elif name == "Double Chance" and rows:
+        key = "double_chance"
+        row = rows[0]
+        outcomes = [
+            _outcome("1X", _first_value(row, "homeDraw", "1X", "1x")),
+            _outcome("X2", _first_value(row, "awayDraw", "X2", "x2")),
+        ]
     elif name == "Both Teams To Score" and rows:
         key = "btts"
         row = rows[0]
@@ -198,10 +205,28 @@ def _chunks(rows: list[dict[str, Any]], size: int):
         yield rows[index : index + size]
 
 
-def _closest_rows(rows: list[dict[str, Any]], target: Decimal) -> list[dict[str, Any]]:
-    valid = [(row, _decimal(row.get("hdp"))) for row in rows]
-    valid = [(row, line) for row, line in valid if line is not None]
+def _balanced_rows(
+    rows: list[dict[str, Any]],
+    first_price: str,
+    second_price: str,
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    valid = []
+    for row in rows:
+        line = _decimal(row.get("hdp"))
+        first = _decimal(row.get(first_price))
+        second = _decimal(row.get(second_price))
+        if line is not None and first is not None and second is not None:
+            valid.append((row, line, abs(first - second)))
     if not valid:
         return []
-    row, _ = min(valid, key=lambda item: (abs(item[1] - target), abs(item[1])))
-    return [row]
+    _, main_line, _ = min(valid, key=lambda item: (item[2], abs(item[1])))
+    selected = sorted(valid, key=lambda item: (abs(item[1] - main_line), item[2]))[:limit]
+    return [row for row, _, _ in sorted(selected, key=lambda item: item[1])]
+
+
+def _first_value(row: dict[str, Any], *keys: str):
+    for key in keys:
+        if row.get(key) not in {None, "", "N/A"}:
+            return row[key]
+    return None

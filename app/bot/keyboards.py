@@ -7,7 +7,7 @@ from app.money import format_cents
 
 BOT_PRIVATE_URL = "https://t.me/StavkiPoFanu_bot"
 MATCHES_PER_PAGE = 6
-ODDS_BLOCKS_PER_PAGE = 5
+ODDS_BLOCKS_PER_PAGE = 10
 STAKE_OPTIONS_CENTS = [100, 500, 1000, 2500]
 
 
@@ -116,7 +116,12 @@ def odds_keyboard(
         nav.append(InlineKeyboardButton(text="Далі ➡️", callback_data=f"m:o:{match_id}:{page + 1}"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton(text="⬅️ До матчів", callback_data="m:p:0")])
+    rows.append(
+        [
+            InlineKeyboardButton(text="⬅️ До матчів", callback_data="m:p:0"),
+            InlineKeyboardButton(text="🧾 Мій купон", callback_data="u:slip"),
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

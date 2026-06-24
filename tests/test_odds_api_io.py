@@ -45,18 +45,27 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
                             {
                                 "name": "Spread",
                                 "odds": [
+                                    {"hdp": -2.0, "home": "3.50", "away": "1.30"},
                                     {"hdp": -1.5, "home": "4.60", "away": "1.20"},
                                     {"hdp": -0.25, "home": "1.94", "away": "1.84"},
                                     {"hdp": 0.5, "home": "1.34", "away": "3.25"},
+                                    {"hdp": 1.0, "home": "1.16", "away": "5.10"},
                                 ],
                             },
                             {
                                 "name": "Totals",
                                 "odds": [
+                                    {"hdp": 4.5, "over": "5.25", "under": "1.14"},
                                     {"hdp": 3.5, "over": "3.25", "under": "1.33"},
+                                    {"hdp": 3.0, "over": "2.48", "under": "1.52"},
                                     {"hdp": 2.5, "over": "2.06", "under": "1.76"},
                                     {"hdp": 2.25, "over": "1.80", "under": "2.02"},
+                                    {"hdp": 2.0, "over": "1.55", "under": "2.36"},
                                 ],
+                            },
+                            {
+                                "name": "Double Chance",
+                                "odds": [{"homeDraw": "1.25", "awayDraw": "1.62"}],
                             },
                             {"name": "Both Teams To Score", "odds": [{"yes": "1.71", "no": "2.00"}]},
                         ]
@@ -69,17 +78,24 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
     assert len(events) == 1
     event = events[0]
     assert event.api_id == "odds_api_io:101"
-    assert [market.key for market in event.markets] == ["h2h", "spreads", "totals", "btts"]
+    assert [market.key for market in event.markets] == [
+        "h2h",
+        "spreads",
+        "totals",
+        "double_chance",
+        "btts",
+    ]
     assert [outcome.selection for outcome in event.markets[0].outcomes] == [
         "Switzerland",
         "Draw",
         "Canada",
     ]
-    assert event.markets[1].outcomes[0].point == -0.25
-    assert event.markets[1].outcomes[1].point == 0.25
-    assert event.markets[2].outcomes[0].selection == "Over"
-    assert event.markets[2].outcomes[0].point == 2.5
-    assert [outcome.selection for outcome in event.markets[3].outcomes] == ["Yes", "No"]
+    spread_lines = sorted({abs(outcome.point) for outcome in event.markets[1].outcomes})
+    assert spread_lines == [0.25, 0.5, 1.5]
+    total_lines = sorted({outcome.point for outcome in event.markets[2].outcomes})
+    assert total_lines == [2.0, 2.25, 2.5]
+    assert [outcome.selection for outcome in event.markets[3].outcomes] == ["1X", "X2"]
+    assert [outcome.selection for outcome in event.markets[4].outcomes] == ["Yes", "No"]
 
 
 async def test_fetch_odds_batches_ten_events_per_request():

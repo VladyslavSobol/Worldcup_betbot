@@ -902,9 +902,10 @@ async def _odds_view(
         return "Для цього матчу немає відкритих ринків.", matches_keyboard([], 0, False)
     lines = [
         f"🏟 {match_title(match)}",
-        f"📄 Блоки ставок · сторінка {page + 1}",
+        f"🕐 {_aware_utc(match.kickoff_at).strftime('%Y-%m-%d %H:%M UTC')}",
+        "🟢 Ставки відкриті",
         "",
-        "Оберіть ринок і натисніть потрібний коефіцієнт:",
+        "👇 Натисніть потрібний коефіцієнт. Після цього бот покаже підтвердження ставки.",
         "",
     ]
     for block in page_blocks:
@@ -938,23 +939,26 @@ def _odds_blocks(rows: list[OddsSnapshot]) -> list[list[OddsSnapshot]]:
             key = (option.market.type, None)
         blocks.setdefault(key, []).append(option)
 
+    for key, block in list(blocks.items()):
+        if key[0] == MarketType.spreads:
+            blocks[key] = _latest_spread_pair(block)
+
     total_keys = [key for key in blocks if key[0] == MarketType.totals]
     spread_keys = [key for key in blocks if key[0] == MarketType.spreads]
     selected_keys = [
-        key for key in blocks if key[0] in {MarketType.h2h, MarketType.btts}
+        key
+        for key in blocks
+        if key[0] in {MarketType.h2h, MarketType.double_chance, MarketType.btts}
     ]
-    if total_keys:
-        selected_keys.append(
-            min(total_keys, key=lambda key: abs((key[1] or Decimal("0")) - Decimal("2.5")))
-        )
-    if spread_keys:
-        selected_keys.append(min(spread_keys, key=lambda key: key[1] or Decimal("0")))
+    selected_keys.extend(_three_balanced_market_keys(total_keys, blocks))
+    selected_keys.extend(_three_balanced_market_keys(spread_keys, blocks))
 
     type_rank = {
         MarketType.h2h: 0,
-        MarketType.totals: 1,
-        MarketType.spreads: 2,
-        MarketType.btts: 3,
+        MarketType.double_chance: 1,
+        MarketType.totals: 2,
+        MarketType.spreads: 3,
+        MarketType.btts: 4,
     }
     selected_keys.sort(key=lambda key: (type_rank.get(key[0], 9), str(key[1] or "")))
 
@@ -977,6 +981,48 @@ def _odds_blocks(rows: list[OddsSnapshot]) -> list[list[OddsSnapshot]]:
         return (3, option.selection)
 
     return [sorted(blocks[key], key=selection_rank) for key in selected_keys]
+
+
+def _latest_spread_pair(block: list[OddsSnapshot]) -> list[OddsSnapshot]:
+    pairs = []
+    for first in block:
+        for second in block:
+            if first.id >= second.id or first.selection == second.selection:
+                continue
+            first_line = first.market.line or Decimal("0")
+            second_line = second.market.line or Decimal("0")
+            if first_line + second_line == 0:
+                pairs.append((first, second))
+    if not pairs:
+        latest_by_team: dict[str, OddsSnapshot] = {}
+        for option in sorted(block, key=lambda row: row.id, reverse=True):
+            latest_by_team.setdefault(option.selection, option)
+        return list(latest_by_team.values())[:2]
+    return list(max(pairs, key=lambda pair: min(pair[0].id, pair[1].id)))
+
+
+def _three_balanced_market_keys(
+    keys: list[tuple],
+    blocks: dict[tuple, list[OddsSnapshot]],
+) -> list[tuple]:
+    if len(keys) <= 3:
+        return sorted(keys, key=lambda key: key[1] or Decimal("0"))
+
+    def balance(key: tuple) -> tuple[Decimal, Decimal]:
+        prices = [option.decimal_odds for option in blocks[key]]
+        difference = abs(prices[0] - prices[1]) if len(prices) >= 2 else Decimal("999")
+        return difference, abs(key[1] or Decimal("0"))
+
+    main_key = min(keys, key=balance)
+    main_line = main_key[1] or Decimal("0")
+    selected = sorted(
+        keys,
+        key=lambda key: (
+            abs((key[1] or Decimal("0")) - main_line),
+            balance(key),
+        ),
+    )[:3]
+    return sorted(selected, key=lambda key: key[1] or Decimal("0"))
 
 
 def _dedupe_matches(matches: list[Match]) -> list[Match]:
@@ -1820,6 +1866,9 @@ def _explain_text() -> str:
         "1X2\n"
         "Ставка на результат матчу в основний час.\n"
         "1 - виграє перша команда, X - нічия, 2 - виграє друга команда.\n\n"
+        "Подвійний шанс\n"
+        "П1 або нічия (1X) - ставка виграє, якщо перша команда переможе або буде нічия.\n"
+        "П2 або нічия (X2) - ставка виграє, якщо друга команда переможе або буде нічия.\n\n"
         "Фора / handicap\n"
         "Це віртуальна перевага або мінус до рахунку команди.\n"
         "Австрія +1 означає: до голів Австрії додаємо 1. Якщо після цього Австрія не програла - ставка зіграла. "
@@ -1830,6 +1879,9 @@ def _explain_text() -> str:
         "Більше 2.5 - треба 3 або більше голів.\n"
         "Менше 2.5 - треба 0, 1 або 2 голи.\n"
         "Якщо лінія ціла, наприклад 3.0, і в матчі рівно 3 голи - ставка повертається.\n\n"
+        "Обидві заб’ють\n"
+        "Так - обидві команди мають забити хоча б по одному голу в основний час.\n"
+        "Ні - хоча б одна команда не повинна забити.\n\n"
         "Коефіцієнт\n"
         "Якщо поставив $4 на коефіцієнт 2.50 і ставка виграла, отримаєш $10.00. "
         "Чистий плюс буде $6.00, бо $4 вже були списані при ставці."
@@ -1839,6 +1891,7 @@ def _explain_text() -> str:
 def _market_name(market: Market) -> str:
     labels = {
         MarketType.h2h: "1X2",
+        MarketType.double_chance: "Подвійний шанс",
         MarketType.totals: "Тотал",
         MarketType.spreads: "Фора",
         MarketType.btts: "Обидві заб’ють",
