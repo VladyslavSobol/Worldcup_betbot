@@ -11,6 +11,7 @@ from app.integrations.odds_api import OddsEvent, OddsOutcome
 from app.integrations.providers import OddsProvider, ScoreEvent
 from app.models import Bet, BetStatus, ExpressBetItem, Market, MarketStatus, MarketType, Match, MatchStatus, OddsSnapshot, utcnow
 from app.services.betting import settle_match
+from app.team_names import canonical_team_name
 
 
 @dataclass(frozen=True)
@@ -47,28 +48,29 @@ async def sync_scores_with_results(
         completed = event.completed if isinstance(event, ScoreEvent) else bool(event.get("completed"))
         if not completed:
             continue
-        match = await _find_match_for_score(session, event)
-        if not match or match.status in {
-            MatchStatus.finished,
-            MatchStatus.canceled,
-            MatchStatus.postponed,
-        }:
-            continue
-        home_goals, away_goals = _score_values(event, match)
-        if home_goals is None or away_goals is None:
-            continue
-        single_bet_ids, express_bet_ids = await _open_settlement_target_ids(session, match.id)
-        settled_count = await settle_match(session, match.id, home_goals, away_goals)
-        results.append(
-            ScoreSettlementResult(
-                match_id=match.id,
-                home_goals=home_goals,
-                away_goals=away_goals,
-                settled_count=settled_count,
-                single_bet_ids=single_bet_ids,
-                express_bet_ids=express_bet_ids,
+        matches = await _find_matches_for_score(session, event)
+        for match in matches:
+            if match.status in {
+                MatchStatus.finished,
+                MatchStatus.canceled,
+                MatchStatus.postponed,
+            }:
+                continue
+            home_goals, away_goals = _score_values(event, match)
+            if home_goals is None or away_goals is None:
+                continue
+            single_bet_ids, express_bet_ids = await _open_settlement_target_ids(session, match.id)
+            settled_count = await settle_match(session, match.id, home_goals, away_goals)
+            results.append(
+                ScoreSettlementResult(
+                    match_id=match.id,
+                    home_goals=home_goals,
+                    away_goals=away_goals,
+                    settled_count=settled_count,
+                    single_bet_ids=single_bet_ids,
+                    express_bet_ids=express_bet_ids,
+                )
             )
-        )
     return results
 
 
@@ -111,8 +113,6 @@ async def upsert_event_odds(session: AsyncSession, event: OddsEvent) -> int:
         session.add(match)
         await session.flush()
     else:
-        match.home_team = event.home_team
-        match.away_team = event.away_team
         match.kickoff_at = event.commence_time
         match.updated_at = utcnow()
 
@@ -123,7 +123,10 @@ async def upsert_event_odds(session: AsyncSession, event: OddsEvent) -> int:
             if market_type is None:
                 continue
             line = _line_for_market(market_type, outcome)
-            selection_scope = _selection_scope_for_market(market_type, outcome)
+            selection = _selection_for_match(market_type, outcome, event, match)
+            selection_scope = (
+                selection if market_type == MarketType.spreads else None
+            )
             market = await _get_or_create_market(
                 session,
                 match.id,
@@ -135,7 +138,7 @@ async def upsert_event_odds(session: AsyncSession, event: OddsEvent) -> int:
             session.add(
                 OddsSnapshot(
                     market_id=market.id,
-                    selection=_selection_for_market(market_type, outcome),
+                    selection=selection,
                     decimal_odds=outcome.price,
                     source=api_market.bookmaker,
                 )
@@ -180,6 +183,7 @@ def _market_type(key: str) -> MarketType | None:
         "h2h": MarketType.h2h,
         "totals": MarketType.totals,
         "spreads": MarketType.spreads,
+        "btts": MarketType.btts,
         "outrights": MarketType.outrights,
     }
     return mapping.get(key)
@@ -191,15 +195,19 @@ def _line_for_market(market_type: MarketType, outcome: OddsOutcome) -> Decimal |
     return None
 
 
-def _selection_scope_for_market(market_type: MarketType, outcome: OddsOutcome) -> str | None:
-    if market_type == MarketType.spreads:
-        return outcome.selection
-    return None
-
-
-def _selection_for_market(market_type: MarketType, outcome: OddsOutcome) -> str:
+def _selection_for_match(
+    market_type: MarketType,
+    outcome: OddsOutcome,
+    event: OddsEvent,
+    match: Match,
+) -> str:
     if market_type == MarketType.totals:
         return outcome.selection.title()
+    if market_type in {MarketType.h2h, MarketType.spreads}:
+        if canonical_team_name(outcome.selection) == canonical_team_name(event.home_team):
+            return match.home_team
+        if canonical_team_name(outcome.selection) == canonical_team_name(event.away_team):
+            return match.away_team
     return outcome.selection
 
 
@@ -235,19 +243,27 @@ async def _fetch_scores(client, sport_key: str | None):
     return await client.fetch_scores()
 
 
-async def _find_match_for_score(
+async def _find_matches_for_score(
     session: AsyncSession,
     event: ScoreEvent | dict,
-) -> Match | None:
+) -> list[Match]:
     if isinstance(event, ScoreEvent):
-        return await _find_match(
-            session,
-            event.api_id,
-            event.home_team,
-            event.away_team,
-            event.commence_time,
-        )
-    return await session.scalar(select(Match).where(Match.api_id == event.get("id")))
+        matches = []
+        exact = await session.scalar(select(Match).where(Match.api_id == event.api_id))
+        if exact:
+            matches.append(exact)
+        if event.commence_time is not None:
+            matches.extend(
+                await _matching_team_time_candidates(
+                    session,
+                    event.home_team,
+                    event.away_team,
+                    event.commence_time,
+                )
+            )
+        return list({match.id: match for match in matches}.values())
+    match = await session.scalar(select(Match).where(Match.api_id == event.get("id")))
+    return [match] if match else []
 
 
 async def _find_match(
@@ -261,6 +277,21 @@ async def _find_match(
     if match or commence_time is None:
         return match
 
+    candidates = await _matching_team_time_candidates(
+        session,
+        home_team,
+        away_team,
+        commence_time,
+    )
+    return candidates[0] if candidates else None
+
+
+async def _matching_team_time_candidates(
+    session: AsyncSession,
+    home_team: str,
+    away_team: str,
+    commence_time: datetime,
+) -> list[Match]:
     kickoff = _aware_utc(commence_time)
     candidates = (
         await session.scalars(
@@ -272,13 +303,14 @@ async def _find_match(
     ).all()
     normalized_home = _normalize_team(home_team)
     normalized_away = _normalize_team(away_team)
-    for candidate in candidates:
+    return [
+        candidate
+        for candidate in candidates
         if (
             _normalize_team(candidate.home_team) == normalized_home
             and _normalize_team(candidate.away_team) == normalized_away
-        ):
-            return candidate
-    return None
+        )
+    ]
 
 
 def _score_values(
@@ -292,7 +324,7 @@ def _score_values(
 
 
 def _normalize_team(name: str) -> str:
-    return " ".join(sorted(name.casefold().split()))
+    return canonical_team_name(name)
 
 
 def _aware_utc(value: datetime) -> datetime:

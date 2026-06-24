@@ -108,7 +108,8 @@ def _parse_market(
         key = "h2h"
     elif name == "Spread":
         key = "spreads"
-        for row in rows:
+        selected_rows = _closest_rows(rows, Decimal("0"))
+        for row in selected_rows:
             point = _decimal(row.get("hdp"))
             if point is None:
                 continue
@@ -120,7 +121,8 @@ def _parse_market(
             )
     elif name == "Totals":
         key = "totals"
-        for row in rows:
+        selected_rows = _closest_rows(rows, Decimal("2.5"))
+        for row in selected_rows:
             point = _decimal(row.get("hdp"))
             if point is None:
                 continue
@@ -130,6 +132,13 @@ def _parse_market(
                     _outcome("Under", row.get("under"), point),
                 ]
             )
+    elif name == "Both Teams To Score" and rows:
+        key = "btts"
+        row = rows[0]
+        outcomes = [
+            _outcome("Yes", row.get("yes")),
+            _outcome("No", row.get("no")),
+        ]
     else:
         return None
     valid_outcomes = [outcome for outcome in outcomes if outcome is not None]
@@ -187,3 +196,12 @@ def _parse_datetime(value) -> datetime:
 def _chunks(rows: list[dict[str, Any]], size: int):
     for index in range(0, len(rows), size):
         yield rows[index : index + size]
+
+
+def _closest_rows(rows: list[dict[str, Any]], target: Decimal) -> list[dict[str, Any]]:
+    valid = [(row, _decimal(row.get("hdp"))) for row in rows]
+    valid = [(row, line) for row, line in valid if line is not None]
+    if not valid:
+        return []
+    row, _ = min(valid, key=lambda item: (abs(item[1] - target), abs(item[1])))
+    return [row]

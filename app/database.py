@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
@@ -16,3 +17,7 @@ async def init_db(session_factory: async_sessionmaker[AsyncSession]) -> None:
     engine = session_factory.kw["bind"]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if engine.dialect.name == "postgresql":
+            await conn.execute(
+                text("ALTER TYPE markettype ADD VALUE IF NOT EXISTS 'btts'")
+            )

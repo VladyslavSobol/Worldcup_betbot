@@ -1,6 +1,6 @@
 ﻿from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.bot.formatting import match_button_title, market_title, odds_button_label
+from app.bot.formatting import match_button_title, market_block_title, odds_button_label
 from app.models import Match, OddsSnapshot
 from app.money import format_cents
 
@@ -99,7 +99,7 @@ def odds_keyboard(
     for block in odds_blocks:
         if not block:
             continue
-        rows.append([InlineKeyboardButton(text=f"▾ {market_title(block[0])}", callback_data="noop")])
+        rows.append([InlineKeyboardButton(text=f"▾ {market_block_title(block)}", callback_data="noop")])
         buttons = [
             InlineKeyboardButton(text=odds_button_label(option), callback_data=f"o:s:{option.id}")
             for option in block

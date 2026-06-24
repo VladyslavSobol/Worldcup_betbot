@@ -42,8 +42,22 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
                     "bookmakers": {
                         "Unibet": [
                             {"name": "ML", "odds": [{"home": "2.33", "draw": "3.05", "away": "3.40"}]},
-                            {"name": "Spread", "odds": [{"hdp": -0.25, "home": "1.94", "away": "1.84"}]},
-                            {"name": "Totals", "odds": [{"hdp": 2.5, "over": "2.06", "under": "1.76"}]},
+                            {
+                                "name": "Spread",
+                                "odds": [
+                                    {"hdp": -1.5, "home": "4.60", "away": "1.20"},
+                                    {"hdp": -0.25, "home": "1.94", "away": "1.84"},
+                                    {"hdp": 0.5, "home": "1.34", "away": "3.25"},
+                                ],
+                            },
+                            {
+                                "name": "Totals",
+                                "odds": [
+                                    {"hdp": 3.5, "over": "3.25", "under": "1.33"},
+                                    {"hdp": 2.5, "over": "2.06", "under": "1.76"},
+                                    {"hdp": 2.25, "over": "1.80", "under": "2.02"},
+                                ],
+                            },
                             {"name": "Both Teams To Score", "odds": [{"yes": "1.71", "no": "2.00"}]},
                         ]
                     },
@@ -55,7 +69,7 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
     assert len(events) == 1
     event = events[0]
     assert event.api_id == "odds_api_io:101"
-    assert [market.key for market in event.markets] == ["h2h", "spreads", "totals"]
+    assert [market.key for market in event.markets] == ["h2h", "spreads", "totals", "btts"]
     assert [outcome.selection for outcome in event.markets[0].outcomes] == [
         "Switzerland",
         "Draw",
@@ -64,6 +78,8 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
     assert event.markets[1].outcomes[0].point == -0.25
     assert event.markets[1].outcomes[1].point == 0.25
     assert event.markets[2].outcomes[0].selection == "Over"
+    assert event.markets[2].outcomes[0].point == 2.5
+    assert [outcome.selection for outcome in event.markets[3].outcomes] == ["Yes", "No"]
 
 
 async def test_fetch_odds_batches_ten_events_per_request():

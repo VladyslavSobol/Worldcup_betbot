@@ -38,6 +38,7 @@ class MarketType(str, enum.Enum):
     h2h = "h2h"
     totals = "totals"
     spreads = "spreads"
+    btts = "btts"
     outrights = "outrights"
     correct_score = "correct_score"
     top_goalscorer = "top_goalscorer"

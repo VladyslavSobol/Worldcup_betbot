@@ -99,3 +99,13 @@ def test_outright_win():
         outright_winner="Brazil",
     )
     assert result.status == BetStatus.won
+
+
+def test_btts_yes_wins_when_both_teams_score():
+    result = settle_selection(MarketType.btts, "Yes", "Brazil", "Japan", 2, 1)
+    assert result.status == BetStatus.won
+
+
+def test_btts_no_wins_when_one_team_does_not_score():
+    result = settle_selection(MarketType.btts, "No", "Brazil", "Japan", 3, 0)
+    assert result.status == BetStatus.won

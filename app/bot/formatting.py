@@ -1,5 +1,6 @@
 ﻿from app.models import Bet, BetStatus, MarketType, Match, MatchStatus, OddsSnapshot, User
 from app.money import format_cents
+from app.team_names import canonical_team_name
 
 
 MATCH_STATUS_UA = {
@@ -22,6 +23,7 @@ MARKET_TYPE_UA = {
     MarketType.h2h: "1X2",
     MarketType.totals: "Тотал",
     MarketType.spreads: "Фора",
+    MarketType.btts: "Обидві заб’ють",
     MarketType.outrights: "Довгостроковий",
     MarketType.correct_score: "Точний рахунок",
     MarketType.top_goalscorer: "Бомбардир",
@@ -149,7 +151,7 @@ def user_label(user: User) -> str:
 
 
 def _team_key(name: str | None) -> str:
-    return (name or "").lower().strip()
+    return canonical_team_name(name or "")
 
 
 def country_flag(name: str | None) -> str:
@@ -258,6 +260,15 @@ def market_title(odds: OddsSnapshot) -> str:
     return market_name
 
 
+def market_block_title(block: list[OddsSnapshot]) -> str:
+    if not block:
+        return ""
+    if block[0].market.type == MarketType.spreads:
+        line = abs(block[0].market.line or 0)
+        return f"Фора ±{format_decimal(line)}"
+    return market_title(block[0])
+
+
 def odds_line(odds: OddsSnapshot) -> str:
     match = odds.market.match
     icon = selection_icon(odds.selection, match)
@@ -269,6 +280,8 @@ def odds_button_label(odds: OddsSnapshot) -> str:
     match = odds.market.match
     icon = selection_icon(odds.selection, match)
     label = compact_selection_label(odds.selection, match)
+    if odds.market.type == MarketType.spreads and odds.market.line is not None:
+        label = f"{label} {format_decimal(odds.market.line)}"
     return f"{icon} {label} {format_decimal(odds.decimal_odds)}"
 
 

@@ -26,6 +26,7 @@ from app.bot.formatting import (
     format_profit,
     format_single_bet_card,
     format_top_wins,
+    market_block_title,
     market_title,
     match_line,
     match_title,
@@ -73,6 +74,7 @@ from app.services.betting import (
 )
 from app.services.groups import bind_group_chat, get_primary_group_chat
 from app.services.sync import sync_odds
+from app.team_names import canonical_team_name
 
 
 PENDING_CUSTOM_BETS: dict[int, int] = {}
@@ -805,20 +807,19 @@ async def _matches_view(
     settings: Settings,
     page: int,
 ):
-    offset = max(page, 0) * MATCHES_PER_PAGE
     cutoff = datetime.now(timezone.utc) + timedelta(minutes=settings.bet_close_minutes)
     async with session_factory() as session:
         rows = (
             await session.scalars(
                 select(Match)
                 .where(Match.kickoff_at > cutoff, Match.status == MatchStatus.scheduled)
-                .order_by(Match.kickoff_at)
-                .offset(offset)
-                .limit(MATCHES_PER_PAGE + 1)
+                .order_by(Match.kickoff_at, Match.id)
             )
         ).all()
-    matches = rows[:MATCHES_PER_PAGE]
-    has_next = len(rows) > MATCHES_PER_PAGE
+    unique_matches = _dedupe_matches(rows)
+    offset = max(page, 0) * MATCHES_PER_PAGE
+    matches = unique_matches[offset : offset + MATCHES_PER_PAGE]
+    has_next = len(unique_matches) > offset + MATCHES_PER_PAGE
     if not matches:
         return (
             "Поки немає синхронізованих майбутніх матчів. Адмін може натиснути /admin_sync.",
@@ -833,7 +834,6 @@ async def _today_matches_view(
     settings: Settings,
     page: int,
 ):
-    offset = max(page, 0) * MATCHES_PER_PAGE
     tz = ZoneInfo(settings.app_timezone)
     now_local = datetime.now(tz)
     start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -851,13 +851,13 @@ async def _today_matches_view(
                     Match.kickoff_at > cutoff,
                     Match.status == MatchStatus.scheduled,
                 )
-                .order_by(Match.kickoff_at)
-                .offset(offset)
-                .limit(MATCHES_PER_PAGE + 1)
+                .order_by(Match.kickoff_at, Match.id)
             )
         ).all()
-    matches = rows[:MATCHES_PER_PAGE]
-    has_next = len(rows) > MATCHES_PER_PAGE
+    unique_matches = _dedupe_matches(rows)
+    offset = max(page, 0) * MATCHES_PER_PAGE
+    matches = unique_matches[offset : offset + MATCHES_PER_PAGE]
+    has_next = len(unique_matches) > offset + MATCHES_PER_PAGE
     if not matches:
         return (
             "📅 Ставки на сьогодні\n\nНа сьогодні матчів для ставок немає.",
@@ -908,7 +908,7 @@ async def _odds_view(
         "",
     ]
     for block in page_blocks:
-        lines.append(f"▾ {market_title(block[0])}")
+        lines.append(f"▾ {market_block_title(block)}")
         lines.append("   " + "  |  ".join(odds_line(option) for option in block[:3]))
         if len(block) > 3:
             lines.extend(f"   {odds_line(option)}" for option in block[3:])
@@ -917,20 +917,46 @@ async def _odds_view(
 
 
 def _odds_blocks(rows: list[OddsSnapshot]) -> list[list[OddsSnapshot]]:
-    latest_by_selection: dict[tuple[int, str], OddsSnapshot] = {}
+    latest_by_selection: dict[tuple, OddsSnapshot] = {}
     for option in rows:
-        key = (option.market_id, option.selection)
+        key = (
+            option.market.type,
+            option.market.line,
+            option.market.selection_scope,
+            option.selection,
+        )
         if key not in latest_by_selection:
             latest_by_selection[key] = option
 
-    blocks: dict[tuple[str, str], list[OddsSnapshot]] = {}
-    order: list[tuple[str, str]] = []
+    blocks: dict[tuple, list[OddsSnapshot]] = {}
     for option in latest_by_selection.values():
-        key = (market_title(option), str(option.market.line or ""))
-        if key not in blocks:
-            blocks[key] = []
-            order.append(key)
-        blocks[key].append(option)
+        if option.market.type == MarketType.spreads:
+            key = (MarketType.spreads, abs(option.market.line or Decimal("0")))
+        elif option.market.type == MarketType.totals:
+            key = (MarketType.totals, option.market.line)
+        else:
+            key = (option.market.type, None)
+        blocks.setdefault(key, []).append(option)
+
+    total_keys = [key for key in blocks if key[0] == MarketType.totals]
+    spread_keys = [key for key in blocks if key[0] == MarketType.spreads]
+    selected_keys = [
+        key for key in blocks if key[0] in {MarketType.h2h, MarketType.btts}
+    ]
+    if total_keys:
+        selected_keys.append(
+            min(total_keys, key=lambda key: abs((key[1] or Decimal("0")) - Decimal("2.5")))
+        )
+    if spread_keys:
+        selected_keys.append(min(spread_keys, key=lambda key: key[1] or Decimal("0")))
+
+    type_rank = {
+        MarketType.h2h: 0,
+        MarketType.totals: 1,
+        MarketType.spreads: 2,
+        MarketType.btts: 3,
+    }
+    selected_keys.sort(key=lambda key: (type_rank.get(key[0], 9), str(key[1] or "")))
 
     def selection_rank(option: OddsSnapshot) -> tuple[int, str]:
         normalized = option.selection.lower()
@@ -950,7 +976,28 @@ def _odds_blocks(rows: list[OddsSnapshot]) -> list[list[OddsSnapshot]]:
             return (1, option.selection)
         return (3, option.selection)
 
-    return [sorted(blocks[key], key=selection_rank) for key in order]
+    return [sorted(blocks[key], key=selection_rank) for key in selected_keys]
+
+
+def _dedupe_matches(matches: list[Match]) -> list[Match]:
+    selected: list[Match] = []
+    for match in sorted(
+        matches,
+        key=lambda row: (
+            not str(row.api_id).startswith("odds_api_io:"),
+            row.id or 0,
+        ),
+    ):
+        kickoff = _aware_utc(match.kickoff_at)
+        duplicate = any(
+            canonical_team_name(existing.home_team) == canonical_team_name(match.home_team)
+            and canonical_team_name(existing.away_team) == canonical_team_name(match.away_team)
+            and abs((_aware_utc(existing.kickoff_at) - kickoff).total_seconds()) <= 900
+            for existing in selected
+        )
+        if not duplicate:
+            selected.append(match)
+    return sorted(selected, key=lambda row: (_aware_utc(row.kickoff_at), row.id or 0))
 
 
 async def _bet_confirmation_view(
@@ -1794,6 +1841,7 @@ def _market_name(market: Market) -> str:
         MarketType.h2h: "1X2",
         MarketType.totals: "Тотал",
         MarketType.spreads: "Фора",
+        MarketType.btts: "Обидві заб’ють",
         MarketType.outrights: "Довгострокова",
         MarketType.correct_score: "Точний рахунок",
         MarketType.top_goalscorer: "Бомбардир",

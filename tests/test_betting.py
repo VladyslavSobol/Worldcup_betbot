@@ -436,6 +436,8 @@ async def test_new_provider_odds_reuse_existing_match_by_teams_and_kickoff(
     assert len(matches) == 1
     assert matches[0].id == existing.id
     assert matches[0].api_id == "legacy-event-id"
+    assert matches[0].home_team == "Colombia"
+    assert matches[0].away_team == "DR Congo"
     assert odds[0].source == "Unibet"
 
 
@@ -472,16 +474,27 @@ async def test_new_provider_score_settles_existing_legacy_match(
         odds.market.match.away_team = "DR Congo"
         await place_bet(session, user.telegram_id, odds.id, 1000, settings)
         odds.market.match.kickoff_at = kickoff
+        duplicate = Match(
+            api_id="odds_api_io:101",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Colombia",
+            away_team="Congo DR",
+            kickoff_at=kickoff + timedelta(minutes=5),
+        )
+        session.add(duplicate)
+        await session.flush()
 
         results = await sync_scores_with_results(session, FakeProvider())
         await session.commit()
 
         match = await session.get(Match, odds.market.match_id)
+        duplicate = await session.get(Match, duplicate.id)
         bet = await session.scalar(select(Bet))
 
-    assert len(results) == 1
+    assert len(results) == 2
     assert match.api_id == "legacy-event-id"
     assert match.status == MatchStatus.finished
+    assert duplicate.status == MatchStatus.finished
     assert bet.status == BetStatus.won
 
 

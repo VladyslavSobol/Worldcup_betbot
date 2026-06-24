@@ -56,6 +56,15 @@ def settle_selection(
             return SettlementResult(BetStatus.push)
         return _status(adjusted > opponent)
 
+    if market_type == MarketType.btts:
+        both_scored = home_score > 0 and away_score > 0
+        normalized = selection.casefold()
+        if normalized in {"yes", "так"}:
+            return _status(both_scored)
+        if normalized in {"no", "ні"}:
+            return _status(not both_scored)
+        raise ValueError(f"Unsupported BTTS selection: {selection}")
+
     if market_type == MarketType.outrights:
         if outright_winner is None:
             raise ValueError("Outright settlement requires an outright winner")
