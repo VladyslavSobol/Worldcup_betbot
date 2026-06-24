@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -16,7 +17,7 @@ from app.bot.handlers import (
 from app.config import get_settings
 from app.database import init_db, make_session_factory
 from app.integrations.odds_api import OddsApiClient
-from app.models import Match
+from app.models import Match, MatchStatus
 from app.services.sync import ScoreSettlementResult, sync_odds, sync_scores_with_results
 
 
@@ -78,6 +79,17 @@ async def _sync_odds_job(session_factory, client: OddsApiClient) -> None:
 async def _sync_scores_job(session_factory, client: OddsApiClient, bot: Bot, settings) -> None:
     try:
         async with session_factory() as session:
+            overdue_match_id = await session.scalar(
+                select(Match.id)
+                .where(
+                    Match.status == MatchStatus.scheduled,
+                    Match.kickoff_at <= datetime.now(timezone.utc) - timedelta(hours=2),
+                )
+                .limit(1)
+            )
+            if overdue_match_id is None:
+                logger.info("Skipped scores sync: no overdue scheduled matches")
+                return
             results = await sync_scores_with_results(session, client)
             await session.commit()
         count = len(results)

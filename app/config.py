@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     odds_api_base_url: str = Field(default="https://api.the-odds-api.com")
     odds_regions: str = Field(default="eu,uk")
     odds_markets: str = Field(default="h2h,spreads,totals,outrights")
-    odds_poll_seconds: int = Field(default=900)
-    scores_poll_seconds: int = Field(default=300)
+    odds_poll_seconds: int = Field(default=86400)
+    scores_poll_seconds: int = Field(default=900)
 
     bet_close_minutes: int = Field(default=5)
     min_stake_cents: int = Field(default=100)
