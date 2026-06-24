@@ -16,7 +16,7 @@ from app.bot.handlers import (
 )
 from app.config import get_settings
 from app.database import init_db, make_session_factory
-from app.integrations.odds_api import OddsApiClient
+from app.integrations.providers import OddsProvider, build_odds_provider
 from app.models import Match, MatchStatus
 from app.services.sync import ScoreSettlementResult, sync_odds, sync_scores_with_results
 
@@ -35,21 +35,21 @@ async def main() -> None:
     bot = Bot(settings.telegram_bot_token)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
-    if settings.odds_api_key:
-        client = OddsApiClient(settings)
+    if settings.odds_api_key or settings.odds_api_io_key:
+        client = build_odds_provider(settings)
         _schedule_sync_jobs(scheduler, session_factory, client, bot, settings)
         scheduler.start()
         asyncio.create_task(_sync_odds_job(session_factory, client))
         asyncio.create_task(_sync_scores_job(session_factory, client, bot, settings))
     else:
-        logger.warning("ODDS_API_KEY is empty; automatic odds sync is disabled.")
+        logger.warning("No odds provider key is configured; automatic sync is disabled.")
 
     dispatcher = Dispatcher()
     dispatcher.include_router(build_router(session_factory, settings))
     await dispatcher.start_polling(bot)
 
 
-def _schedule_sync_jobs(scheduler, session_factory, client, bot: Bot, settings) -> None:
+def _schedule_sync_jobs(scheduler, session_factory, client: OddsProvider, bot: Bot, settings) -> None:
     scheduler.add_job(
         _sync_odds_job,
         "interval",
@@ -66,7 +66,7 @@ def _schedule_sync_jobs(scheduler, session_factory, client, bot: Bot, settings) 
     )
 
 
-async def _sync_odds_job(session_factory, client: OddsApiClient) -> None:
+async def _sync_odds_job(session_factory, client: OddsProvider) -> None:
     try:
         async with session_factory() as session:
             count = await sync_odds(session, client)
@@ -76,7 +76,7 @@ async def _sync_odds_job(session_factory, client: OddsApiClient) -> None:
         logger.exception("Odds sync failed")
 
 
-async def _sync_scores_job(session_factory, client: OddsApiClient, bot: Bot, settings) -> None:
+async def _sync_scores_job(session_factory, client: OddsProvider, bot: Bot, settings) -> None:
     try:
         async with session_factory() as session:
             overdue_match_id = await session.scalar(

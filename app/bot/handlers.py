@@ -50,7 +50,7 @@ from app.bot.keyboards import (
     stake_keyboard,
 )
 from app.config import Settings
-from app.integrations.odds_api import OddsApiClient
+from app.integrations.providers import build_odds_provider
 from app.models import Bet, BetStatus, ExpressBet, ExpressBetItem, Market, MarketStatus, MarketType, Match, MatchStatus, OddsSnapshot, User
 from app.money import format_cents, parse_cents, payout_cents
 from app.services.betting import (
@@ -780,12 +780,12 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
         if not _is_admin(message, settings):
             await message.answer("Ця команда тільки для адміна.")
             return
-        if not settings.odds_api_key:
-            await message.answer("ODDS_API_KEY не налаштований.")
+        if not settings.odds_api_key and not settings.odds_api_io_key:
+            await message.answer("API для коефіцієнтів не налаштований.")
             return
         try:
             async with session_factory() as session:
-                count = await sync_odds(session, OddsApiClient(settings))
+                count = await sync_odds(session, build_odds_provider(settings))
                 await session.commit()
             await message.answer(f"Оновлено коефіцієнтів: {count}.")
         except Exception as exc:

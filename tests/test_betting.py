@@ -21,6 +21,9 @@ from app.services.betting import (
     void_match,
 )
 from app.services.sync import sync_scores, sync_scores_with_results
+from app.integrations.odds_api import OddsEvent, OddsMarket, OddsOutcome
+from app.integrations.providers import ScoreEvent
+from app.services.sync import sync_odds
 
 
 async def test_user_gets_starting_balance(session_factory, settings):
@@ -380,6 +383,106 @@ async def test_sync_scores_with_results_returns_settled_bet_targets(session_fact
     assert results[0].away_goals == 1
     assert results[0].single_bet_ids
     assert express.id in results[0].express_bet_ids
+
+
+async def test_new_provider_odds_reuse_existing_match_by_teams_and_kickoff(
+    session_factory,
+):
+    kickoff = datetime.now(timezone.utc) + timedelta(days=1)
+
+    class FakeProvider:
+        async def fetch_odds(self):
+            return [
+                OddsEvent(
+                    api_id="odds_api_io:101",
+                    sport_key="soccer_fifa_world_cup",
+                    home_team="Colombia",
+                    away_team="Congo DR",
+                    commence_time=kickoff + timedelta(minutes=5),
+                    markets=[
+                        OddsMarket(
+                            key="h2h",
+                            bookmaker="Unibet",
+                            outcomes=[
+                                OddsOutcome(
+                                    selection="Colombia",
+                                    price=Decimal("2.33"),
+                                    point=None,
+                                )
+                            ],
+                        )
+                    ],
+                )
+            ]
+
+    async with session_factory() as session:
+        existing = Match(
+            api_id="legacy-event-id",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Colombia",
+            away_team="DR Congo",
+            kickoff_at=kickoff,
+        )
+        session.add(existing)
+        await session.flush()
+
+        count = await sync_odds(session, FakeProvider())
+        await session.commit()
+
+        matches = (await session.scalars(select(Match))).all()
+        odds = (await session.scalars(select(OddsSnapshot))).all()
+
+    assert count == 1
+    assert len(matches) == 1
+    assert matches[0].id == existing.id
+    assert matches[0].api_id == "legacy-event-id"
+    assert odds[0].source == "Unibet"
+
+
+async def test_new_provider_score_settles_existing_legacy_match(
+    session_factory,
+    settings,
+):
+    kickoff = datetime.now(timezone.utc) - timedelta(hours=3)
+
+    class FakeProvider:
+        async def fetch_scores(self):
+            return [
+                ScoreEvent(
+                    api_id="odds_api_io:101",
+                    home_team="Colombia",
+                    away_team="Congo DR",
+                    commence_time=kickoff + timedelta(minutes=5),
+                    completed=True,
+                    home_score=2,
+                    away_score=1,
+                )
+            ]
+
+    async with session_factory() as session:
+        user = await get_or_create_user(session, 10, "friend", "Friend", settings)
+        odds = await _seed_open_odds(
+            session,
+            selection="Colombia",
+            price=Decimal("2.00"),
+            api_id="legacy-event-id",
+            kickoff_delta=timedelta(days=1),
+        )
+        odds.market.match.home_team = "Colombia"
+        odds.market.match.away_team = "DR Congo"
+        await place_bet(session, user.telegram_id, odds.id, 1000, settings)
+        odds.market.match.kickoff_at = kickoff
+
+        results = await sync_scores_with_results(session, FakeProvider())
+        await session.commit()
+
+        match = await session.get(Match, odds.market.match_id)
+        bet = await session.scalar(select(Bet))
+
+    assert len(results) == 1
+    assert match.api_id == "legacy-event-id"
+    assert match.status == MatchStatus.finished
+    assert bet.status == BetStatus.won
 
 
 async def _seed_open_odds(

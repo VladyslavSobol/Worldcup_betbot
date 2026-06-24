@@ -11,10 +11,14 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite+aiosqlite:///./worldcup_bot.db")
     admin_telegram_ids: str = Field(default="")
 
+    odds_provider: str = Field(default="the_odds_api")
     odds_api_key: str = Field(default="")
     odds_api_base_url: str = Field(default="https://api.the-odds-api.com")
     odds_regions: str = Field(default="eu,uk")
     odds_markets: str = Field(default="h2h,spreads,totals,outrights")
+    odds_api_io_key: str = Field(default="")
+    odds_api_io_base_url: str = Field(default="https://api.odds-api.io/v3")
+    odds_api_io_bookmakers: str = Field(default="Unibet")
     odds_poll_seconds: int = Field(default=86400)
     scores_poll_seconds: int = Field(default=900)
 
