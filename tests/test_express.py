@@ -21,6 +21,7 @@ from app.services.betting import (
     settle_match,
     void_match,
 )
+from app.services.sync import _open_settlement_target_ids
 
 
 def test_express_calculations():
@@ -50,6 +51,48 @@ async def test_express_all_win(session_factory, settings):
     assert refreshed_user.balance_cents == 12000
 
 
+async def test_express_to_qualify_settles_with_advancing_team(
+    session_factory,
+    settings,
+):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        qualify = await _seed_open_odds(
+            session,
+            "match-qualify-express",
+            "Brazil",
+            "Japan",
+            "Japan",
+            Decimal("2.00"),
+            market_type=MarketType.to_qualify,
+        )
+        regular = await _seed_open_odds(
+            session,
+            "match-regular-express",
+            "France",
+            "Iraq",
+            "France",
+            Decimal("1.50"),
+        )
+        await add_to_bet_slip(session, user.telegram_id, qualify.id, settings)
+        await add_to_bet_slip(session, user.telegram_id, regular.id, settings)
+        express = await place_express_bet(session, user.telegram_id, 1000, settings)
+
+        await settle_match(session, regular.market.match_id, 1, 0)
+        await settle_match(
+            session,
+            qualify.market.match_id,
+            1,
+            1,
+            advancing_team="Japan",
+        )
+        await session.commit()
+        refreshed = await _get_express(session, express.id)
+
+    assert refreshed.status == BetStatus.won
+    assert refreshed.payout_cents == 3000
+
+
 async def test_express_one_loss(session_factory, settings):
     async with session_factory() as session:
         user = await _seed_user(session)
@@ -68,6 +111,51 @@ async def test_express_one_loss(session_factory, settings):
     assert refreshed.status == BetStatus.lost
     assert refreshed.payout_cents == 0
     assert refreshed_user.balance_cents == 9000
+
+
+async def test_express_loses_immediately_when_one_leg_loses(session_factory, settings):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        first = await _seed_open_odds(
+            session, "match-early-loss-a", "Brazil", "Japan", "Brazil", Decimal("2.00")
+        )
+        second = await _seed_open_odds(
+            session, "match-early-loss-b", "France", "Iraq", "France", Decimal("1.50")
+        )
+        await add_to_bet_slip(session, user.telegram_id, first.id, settings)
+        await add_to_bet_slip(session, user.telegram_id, second.id, settings)
+        express = await place_express_bet(session, user.telegram_id, 1000, settings)
+
+        await settle_match(session, first.market.match_id, 0, 1)
+        await session.commit()
+        refreshed = await _get_express(session, express.id)
+
+    assert refreshed.status == BetStatus.lost
+    assert refreshed.payout_cents == 0
+    assert refreshed.items[1].status == BetStatus.open
+
+
+async def test_lost_express_is_not_targeted_for_later_announcement(
+    session_factory,
+    settings,
+):
+    async with session_factory() as session:
+        user = await _seed_user(session)
+        first = await _seed_open_odds(
+            session, "match-no-repeat-a", "Brazil", "Japan", "Brazil", Decimal("2.00")
+        )
+        second = await _seed_open_odds(
+            session, "match-no-repeat-b", "France", "Iraq", "France", Decimal("1.50")
+        )
+        await add_to_bet_slip(session, user.telegram_id, first.id, settings)
+        await add_to_bet_slip(session, user.telegram_id, second.id, settings)
+        express = await place_express_bet(session, user.telegram_id, 1000, settings)
+        await settle_match(session, first.market.match_id, 0, 1)
+        await session.flush()
+
+        _, express_ids = await _open_settlement_target_ids(session, second.market.match_id)
+
+    assert express.id not in express_ids
 
 
 async def test_express_one_void(session_factory, settings):
@@ -283,6 +371,7 @@ async def _seed_open_odds(
     away_team: str,
     selection: str,
     price: Decimal,
+    market_type: MarketType = MarketType.h2h,
 ) -> OddsSnapshot:
     match = Match(
         api_id=api_id,
@@ -293,7 +382,7 @@ async def _seed_open_odds(
     )
     session.add(match)
     await session.flush()
-    market = Market(match_id=match.id, type=MarketType.h2h, source="test")
+    market = Market(match_id=match.id, type=market_type, source="test")
     session.add(market)
     await session.flush()
     odds = OddsSnapshot(

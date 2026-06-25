@@ -43,6 +43,8 @@ def test_odds_blocks_show_three_totals_and_three_spreads():
         _option(match, MarketType.h2h, "Korea Republic", "1.60"),
         _option(match, MarketType.double_chance, "1X", "2.20"),
         _option(match, MarketType.double_chance, "X2", "1.12"),
+        _option(match, MarketType.to_qualify, "South Africa", "2.10"),
+        _option(match, MarketType.to_qualify, "Korea Republic", "1.70"),
         _option(match, MarketType.btts, "Yes", "1.92"),
         _option(match, MarketType.btts, "No", "1.78"),
     ]
@@ -72,6 +74,7 @@ def test_odds_blocks_show_three_totals_and_three_spreads():
     assert [block[0].market.type for block in blocks] == [
         MarketType.h2h,
         MarketType.double_chance,
+        MarketType.to_qualify,
         MarketType.totals,
         MarketType.totals,
         MarketType.totals,

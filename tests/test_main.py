@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.config import Settings
 from app.main import _schedule_sync_jobs, _sync_scores_job
-from app.models import Match
+from app.models import Market, MarketType, Match, MatchStatus
 
 
 class RecordingScheduler:
@@ -88,6 +88,49 @@ async def test_scores_job_calls_api_for_overdue_match(session_factory, settings)
                 home_team="Colombia",
                 away_team="DR Congo",
                 kickoff_at=datetime.now(timezone.utc) - timedelta(hours=3),
+            )
+        )
+        await session.commit()
+
+    client = FakeScoresClient()
+    await _sync_scores_job(session_factory, client, object(), settings)
+
+    assert client.fetch_calls == 1
+
+
+async def test_scores_job_retries_finished_match_with_open_qualification(
+    session_factory,
+    settings,
+):
+    class FakeScoresClient:
+        def __init__(self):
+            self.fetch_calls = 0
+
+        async def find_worldcup_sport_key(self):
+            return "soccer_fifa_world_cup"
+
+        async def fetch_scores(self, sport_key):
+            self.fetch_calls += 1
+            return []
+
+    async with session_factory() as session:
+        match = Match(
+            api_id="finished-qualification",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Brazil",
+            away_team="Japan",
+            kickoff_at=datetime.now(timezone.utc) - timedelta(hours=3),
+            status=MatchStatus.finished,
+            home_score=1,
+            away_score=1,
+        )
+        session.add(match)
+        await session.flush()
+        session.add(
+            Market(
+                match_id=match.id,
+                type=MarketType.to_qualify,
+                source="Unibet",
             )
         )
         await session.commit()

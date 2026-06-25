@@ -279,6 +279,8 @@ def market_block_title(block: list[OddsSnapshot]) -> str:
         return "🏆 Результат матчу"
     if market_type == MarketType.double_chance:
         return "🛡 Подвійний шанс"
+    if market_type == MarketType.to_qualify:
+        return "🏁 Прохід далі"
     if market_type == MarketType.totals:
         return f"⚽ {market_title(block[0])}"
     if market_type == MarketType.spreads:

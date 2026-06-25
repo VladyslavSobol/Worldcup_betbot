@@ -95,7 +95,8 @@ def _parse_market(
     home_team: str,
     away_team: str,
 ) -> OddsMarket | None:
-    name = market.get("name")
+    name = str(market.get("name") or "")
+    normalized_name = " ".join(name.casefold().replace("-", " ").split())
     rows = market.get("odds") or []
     outcomes = []
     if name == "ML" and rows:
@@ -139,6 +140,19 @@ def _parse_market(
             _outcome("1X", _first_value(row, "homeDraw", "1X", "1x")),
             _outcome("X2", _first_value(row, "awayDraw", "X2", "x2")),
         ]
+    elif normalized_name in {
+        "to qualify",
+        "to advance",
+        "qualification",
+        "team to qualify",
+        "winner incl. overtime",
+    } and rows:
+        key = "to_qualify"
+        row = rows[0]
+        outcomes = [
+            _outcome(home_team, _first_value(row, "home", "team1", "1")),
+            _outcome(away_team, _first_value(row, "away", "team2", "2")),
+        ]
     elif name == "Both Teams To Score" and rows:
         key = "btts"
         row = rows[0]
@@ -154,16 +168,20 @@ def _parse_market(
 
 def _parse_score_event(event: dict[str, Any]) -> ScoreEvent:
     scores = event.get("scores") or {}
-    full_time = (scores.get("periods") or {}).get("ft") or scores
+    periods = scores.get("periods") or {}
+    full_time = periods.get("ft") or scores
+    home_team = str(event.get("home") or "")
+    away_team = str(event.get("away") or "")
     status = str(event.get("status") or "").lower()
     return ScoreEvent(
         api_id=f"odds_api_io:{event.get('id')}",
-        home_team=str(event.get("home") or ""),
-        away_team=str(event.get("away") or ""),
+        home_team=home_team,
+        away_team=away_team,
         commence_time=_parse_datetime(event.get("date")),
         completed=status in {"settled", "completed", "finished"},
         home_score=_int(full_time.get("home")),
         away_score=_int(full_time.get("away")),
+        advancing_team=_advancing_team(scores, periods, home_team, away_team),
     )
 
 
@@ -229,4 +247,26 @@ def _first_value(row: dict[str, Any], *keys: str):
     for key in keys:
         if row.get(key) not in {None, "", "N/A"}:
             return row[key]
+    return None
+
+
+def _advancing_team(
+    scores: dict[str, Any],
+    periods: dict[str, Any],
+    home_team: str,
+    away_team: str,
+) -> str | None:
+    top_home = _int(scores.get("home"))
+    top_away = _int(scores.get("away"))
+    if top_home is not None and top_away is not None and top_home != top_away:
+        return home_team if top_home > top_away else away_team
+    penalties = periods.get("ap") or {}
+    penalty_home = _int(penalties.get("home"))
+    penalty_away = _int(penalties.get("away"))
+    if (
+        penalty_home is not None
+        and penalty_away is not None
+        and penalty_home != penalty_away
+    ):
+        return home_team if penalty_home > penalty_away else away_team
     return None

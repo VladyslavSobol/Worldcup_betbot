@@ -132,3 +132,17 @@ def test_double_chance_settlement(selection, home_score, away_score, expected):
         away_score,
     )
     assert result.status == expected
+
+
+def test_to_qualify_uses_actual_advancing_team():
+    result = settle_selection(
+        MarketType.to_qualify,
+        "Japan",
+        "Brazil",
+        "Japan",
+        1,
+        1,
+        outright_winner="Japan",
+    )
+
+    assert result.status == BetStatus.won

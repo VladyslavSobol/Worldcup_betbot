@@ -67,6 +67,10 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
                                 "name": "Double Chance",
                                 "odds": [{"homeDraw": "1.25", "awayDraw": "1.62"}],
                             },
+                            {
+                                "name": "To Qualify",
+                                "odds": [{"home": "1.72", "away": "2.05"}],
+                            },
                             {"name": "Both Teams To Score", "odds": [{"yes": "1.71", "no": "2.00"}]},
                         ]
                     },
@@ -83,6 +87,7 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
         "spreads",
         "totals",
         "double_chance",
+        "to_qualify",
         "btts",
     ]
     assert [outcome.selection for outcome in event.markets[0].outcomes] == [
@@ -95,7 +100,11 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
     total_lines = sorted({outcome.point for outcome in event.markets[2].outcomes})
     assert total_lines == [2.0, 2.25, 2.5]
     assert [outcome.selection for outcome in event.markets[3].outcomes] == ["1X", "X2"]
-    assert [outcome.selection for outcome in event.markets[4].outcomes] == ["Yes", "No"]
+    assert [outcome.selection for outcome in event.markets[4].outcomes] == [
+        "Switzerland",
+        "Canada",
+    ]
+    assert [outcome.selection for outcome in event.markets[5].outcomes] == ["Yes", "No"]
 
 
 async def test_fetch_odds_batches_ten_events_per_request():
@@ -152,3 +161,32 @@ async def test_fetch_scores_normalizes_completed_event():
     assert scores[0].completed is True
     assert scores[0].home_score == 2
     assert scores[0].away_score == 1
+
+
+async def test_fetch_scores_keeps_regulation_score_and_penalty_winner():
+    class FakeClient(OddsApiIoClient):
+        async def _get(self, path, params):
+            return [
+                {
+                    "id": 202,
+                    "home": "Switzerland",
+                    "away": "Canada",
+                    "date": "2026-06-30T19:00:00Z",
+                    "status": "settled",
+                    "league": {"name": "FIFA World Cup"},
+                    "scores": {
+                        "home": 5,
+                        "away": 4,
+                        "periods": {
+                            "ft": {"home": 1, "away": 1},
+                            "ap": {"home": 4, "away": 3},
+                        },
+                    },
+                }
+            ]
+
+    score = (await FakeClient(_settings()).fetch_scores())[0]
+
+    assert score.home_score == 1
+    assert score.away_score == 1
+    assert score.advancing_team == "Switzerland"

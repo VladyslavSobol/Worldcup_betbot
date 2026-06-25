@@ -17,6 +17,7 @@ from app.models import (
     ExpressBetItem,
     Market,
     MarketStatus,
+    MarketType,
     Match,
     MatchStatus,
     OddsSnapshot,
@@ -314,6 +315,7 @@ async def settle_match(
     home_score: int,
     away_score: int,
     admin_telegram_id: int | None = None,
+    advancing_team: str | None = None,
 ) -> int:
     match = await session.scalar(select(Match).where(Match.id == match_id))
     if not match:
@@ -333,6 +335,8 @@ async def settle_match(
 
     settled = 0
     for bet in bets:
+        if bet.market.type == MarketType.to_qualify and advancing_team is None:
+            continue
         result = settle_selection(
             market_type=bet.market.type,
             selection=bet.selection,
@@ -342,6 +346,7 @@ async def settle_match(
             away_score=away_score,
             line=bet.market.line,
             selection_scope=bet.market.selection_scope,
+            outright_winner=advancing_team,
         )
         bet.status = result.status
         bet.settled_at = utcnow()
@@ -361,11 +366,14 @@ async def settle_match(
         home_score=home_score,
         away_score=away_score,
         void=False,
+        advancing_team=advancing_team,
     )
 
     for market in (
         await session.scalars(select(Market).where(Market.match_id == match_id))
     ).all():
+        if market.type == MarketType.to_qualify and advancing_team is None:
+            continue
         market.status = MarketStatus.settled
 
     session.add(
@@ -434,6 +442,7 @@ async def settle_express_items_for_match(
     away_score: int,
     void: bool = False,
     reason: str = "",
+    advancing_team: str | None = None,
 ) -> int:
     items = (
         await session.scalars(
@@ -448,6 +457,12 @@ async def settle_express_items_for_match(
     ).all()
     settled_express_ids: set[int] = set()
     for item in items:
+        if (
+            not void
+            and item.market.type == MarketType.to_qualify
+            and advancing_team is None
+        ):
+            continue
         if void:
             item.status = BetStatus.void
             item.result_info = reason
@@ -461,6 +476,7 @@ async def settle_express_items_for_match(
                 away_score=away_score,
                 line=item.market.line,
                 selection_scope=item.market.selection_scope,
+                outright_winner=advancing_team,
             )
             item.status = result.status
         item.settled_at = utcnow()
@@ -474,15 +490,18 @@ def _settle_express_if_ready(express: ExpressBet) -> bool:
     if express.status != BetStatus.open:
         return False
     items = list(express.items)
-    if not items or any(item.status == BetStatus.open for item in items):
+    if not items:
         return False
 
-    express.settled_at = utcnow()
     if any(item.status == BetStatus.lost for item in items):
+        express.settled_at = utcnow()
         express.status = BetStatus.lost
         express.payout_cents = 0
         return True
+    if any(item.status == BetStatus.open for item in items):
+        return False
 
+    express.settled_at = utcnow()
     active_items = [item for item in items if item.status == BetStatus.won]
     if not active_items:
         express.status = BetStatus.void

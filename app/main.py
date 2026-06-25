@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.bot.handlers import (
     _announce_to_group,
@@ -17,7 +17,7 @@ from app.bot.handlers import (
 from app.config import get_settings
 from app.database import init_db, make_session_factory
 from app.integrations.providers import OddsProvider, build_odds_provider
-from app.models import Match, MatchStatus
+from app.models import Market, MarketStatus, MarketType, Match, MatchStatus
 from app.services.sync import ScoreSettlementResult, sync_odds, sync_scores_with_results
 
 
@@ -81,9 +81,20 @@ async def _sync_scores_job(session_factory, client: OddsProvider, bot: Bot, sett
         async with session_factory() as session:
             overdue_match_id = await session.scalar(
                 select(Match.id)
+                .outerjoin(Market, Market.match_id == Match.id)
                 .where(
-                    Match.status == MatchStatus.scheduled,
-                    Match.kickoff_at <= datetime.now(timezone.utc) - timedelta(hours=2),
+                    or_(
+                        and_(
+                            Match.status == MatchStatus.scheduled,
+                            Match.kickoff_at
+                            <= datetime.now(timezone.utc) - timedelta(hours=2),
+                        ),
+                        and_(
+                            Match.status == MatchStatus.finished,
+                            Market.type == MarketType.to_qualify,
+                            Market.status == MarketStatus.open,
+                        ),
+                    )
                 )
                 .limit(1)
             )

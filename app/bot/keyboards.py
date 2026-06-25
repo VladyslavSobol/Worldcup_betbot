@@ -40,32 +40,13 @@ def group_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🎯 Ставити в приваті", url=BOT_PRIVATE_URL)],
             [InlineKeyboardButton(text="📅 Ставки на сьогодні", url=BOT_PRIVATE_URL)],
-            [
-                InlineKeyboardButton(text="🏆 Лідерборд", callback_data="u:board"),
-                InlineKeyboardButton(text="📜 Правила", callback_data="u:rules"),
-            ],
             [InlineKeyboardButton(text="👀 Відкриті ставки", callback_data="u:openbets")],
-            [InlineKeyboardButton(text="💎 Топ виграшів", callback_data="u:topwins")],
-            [InlineKeyboardButton(text="📘 Пояснення ставок", callback_data="u:explain")],
-            [InlineKeyboardButton(text="ℹ️ Як граємо?", callback_data="u:help")],
         ]
     )
 
 
 def group_private_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🎯 Відкрити бота для ставки", url=BOT_PRIVATE_URL)],
-            [InlineKeyboardButton(text="📅 Ставки на сьогодні", url=BOT_PRIVATE_URL)],
-            [
-                InlineKeyboardButton(text="🏆 Лідерборд", callback_data="u:board"),
-                InlineKeyboardButton(text="📜 Правила", callback_data="u:rules"),
-            ],
-            [InlineKeyboardButton(text="👀 Відкриті ставки", callback_data="u:openbets")],
-            [InlineKeyboardButton(text="💎 Топ виграшів", callback_data="u:topwins")],
-            [InlineKeyboardButton(text="📘 Пояснення ставок", callback_data="u:explain")],
-        ]
-    )
+    return group_menu_keyboard()
 
 
 def matches_keyboard(

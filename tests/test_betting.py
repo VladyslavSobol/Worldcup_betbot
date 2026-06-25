@@ -7,7 +7,18 @@ import pytest
 from sqlalchemy import delete, select
 
 from app.bot.handlers import _leaderboard_text, _openbets_text, _topwins_text
-from app.models import Bet, BetStatus, ExpressBet, Market, MarketType, Match, MatchStatus, OddsSnapshot, User
+from app.models import (
+    Bet,
+    BetStatus,
+    ExpressBet,
+    Market,
+    MarketStatus,
+    MarketType,
+    Match,
+    MatchStatus,
+    OddsSnapshot,
+    User,
+)
 from app.services.betting import (
     BettingError,
     add_to_bet_slip,
@@ -326,6 +337,97 @@ async def test_sync_scores_settles_completed_api_match(session_factory, settings
     assert match.status == MatchStatus.finished
     assert bet.status == BetStatus.won
     assert refreshed.balance_cents == 11500
+
+
+async def test_to_qualify_stays_open_without_advancing_team(session_factory, settings):
+    async with session_factory() as session:
+        user = await get_or_create_user(session, 10, "friend", "Friend", settings)
+        match = Match(
+            api_id="qualify-unresolved",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Brazil",
+            away_team="Japan",
+            kickoff_at=datetime.now(timezone.utc) + timedelta(hours=3),
+        )
+        session.add(match)
+        await session.flush()
+        market = Market(match_id=match.id, type=MarketType.to_qualify, source="Unibet")
+        session.add(market)
+        await session.flush()
+        odds = OddsSnapshot(
+            market_id=market.id,
+            selection="Brazil",
+            decimal_odds=Decimal("1.80"),
+            source="Unibet",
+        )
+        session.add(odds)
+        await session.flush()
+        await place_bet(session, user.telegram_id, odds.id, 1000, settings)
+
+        await settle_match(session, match.id, 1, 1, advancing_team=None)
+        await session.commit()
+
+        bet = await session.scalar(select(Bet))
+        refreshed_market = await session.scalar(select(Market))
+
+    assert bet.status == BetStatus.open
+    assert refreshed_market.status == MarketStatus.open
+
+
+async def test_score_sync_settles_to_qualify_with_advancing_team(
+    session_factory,
+    settings,
+):
+    kickoff = datetime.now(timezone.utc) + timedelta(hours=3)
+
+    class FakeProvider:
+        async def fetch_scores(self):
+            return [
+                ScoreEvent(
+                    api_id="odds_api_io:qualify",
+                    home_team="Brazil",
+                    away_team="Japan",
+                    commence_time=kickoff,
+                    completed=True,
+                    home_score=1,
+                    away_score=1,
+                    advancing_team="Japan",
+                )
+            ]
+
+    async with session_factory() as session:
+        user = await get_or_create_user(session, 10, "friend", "Friend", settings)
+        match = Match(
+            api_id="odds_api_io:qualify",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Brazil",
+            away_team="Japan",
+            kickoff_at=kickoff,
+        )
+        session.add(match)
+        await session.flush()
+        market = Market(match_id=match.id, type=MarketType.to_qualify, source="Unibet")
+        session.add(market)
+        await session.flush()
+        odds = OddsSnapshot(
+            market_id=market.id,
+            selection="Japan",
+            decimal_odds=Decimal("2.00"),
+            source="Unibet",
+        )
+        session.add(odds)
+        await session.flush()
+        await place_bet(session, user.telegram_id, odds.id, 1000, settings)
+
+        results = await sync_scores_with_results(session, FakeProvider())
+        await session.commit()
+        bet = await session.scalar(select(Bet))
+        refreshed = await session.scalar(select(User).where(User.telegram_id == 10))
+
+    assert len(results) == 1
+    assert bet.status == BetStatus.won
+    assert bet.payout_cents == 2000
+    assert refreshed.balance_cents == 11000
 
 
 async def test_sync_scores_with_results_returns_settled_bet_targets(session_factory, settings):

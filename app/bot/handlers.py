@@ -174,6 +174,7 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
             text, keyboard = await _bet_confirmation_view(
                 session_factory,
                 settings,
+                telegram_id=message.from_user.id,
                 odds_id=int(args[0]),
                 stake_cents=parse_cents(args[1]),
             )
@@ -202,6 +203,7 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
             text, keyboard = await _bet_confirmation_view(
                 session_factory,
                 settings,
+                telegram_id=message.from_user.id,
                 odds_id=odds_id,
                 stake_cents=parse_cents(_normalize_amount(message.text)),
             )
@@ -419,23 +421,13 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
             await callback.answer("Ставку треба робити в приваті з ботом.", show_alert=True)
             return
         odds_id = int(callback.data.split(":")[2])
-        async with session_factory() as session:
-            odds = await session.scalar(
-                select(OddsSnapshot)
-                .where(OddsSnapshot.id == odds_id)
-                .options(selectinload(OddsSnapshot.market).selectinload(Market.match))
-            )
-        if not odds:
-            await callback.answer("Коефіцієнт не знайдено.", show_alert=True)
-            return
-        PENDING_CUSTOM_BETS[callback.from_user.id] = odds.id
-        await callback.message.edit_text(
-            "Одиночна ставка:\n"
-            f"{match_title(odds.market.match)}\n"
-            f"{odds_line(odds)}\n\n"
-            "Обери суму кнопкою або напиши свою суму повідомленням, наприклад 4 або 4.50:",
-            reply_markup=stake_keyboard(odds.id, odds.market.match_id),
+        PENDING_CUSTOM_BETS[callback.from_user.id] = odds_id
+        text, keyboard = await _single_stake_view(
+            session_factory,
+            callback.from_user.id,
+            odds_id,
         )
+        await callback.message.edit_text(text, reply_markup=keyboard)
         await callback.answer()
 
     @router.callback_query(lambda call: call.data and call.data.startswith("x:add:"))
@@ -614,6 +606,7 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
             text, keyboard = await _bet_confirmation_view(
                 session_factory,
                 settings,
+                telegram_id=callback.from_user.id,
                 odds_id=int(odds_id),
                 stake_cents=int(stake_cents),
             )
@@ -948,7 +941,13 @@ def _odds_blocks(rows: list[OddsSnapshot]) -> list[list[OddsSnapshot]]:
     selected_keys = [
         key
         for key in blocks
-        if key[0] in {MarketType.h2h, MarketType.double_chance, MarketType.btts}
+        if key[0]
+        in {
+            MarketType.h2h,
+            MarketType.double_chance,
+            MarketType.to_qualify,
+            MarketType.btts,
+        }
     ]
     selected_keys.extend(_three_balanced_market_keys(total_keys, blocks))
     selected_keys.extend(_three_balanced_market_keys(spread_keys, blocks))
@@ -956,9 +955,10 @@ def _odds_blocks(rows: list[OddsSnapshot]) -> list[list[OddsSnapshot]]:
     type_rank = {
         MarketType.h2h: 0,
         MarketType.double_chance: 1,
-        MarketType.totals: 2,
-        MarketType.spreads: 3,
-        MarketType.btts: 4,
+        MarketType.to_qualify: 2,
+        MarketType.totals: 3,
+        MarketType.spreads: 4,
+        MarketType.btts: 5,
     }
     selected_keys.sort(key=lambda key: (type_rank.get(key[0], 9), str(key[1] or "")))
 
@@ -1046,9 +1046,36 @@ def _dedupe_matches(matches: list[Match]) -> list[Match]:
     return sorted(selected, key=lambda row: (_aware_utc(row.kickoff_at), row.id or 0))
 
 
+async def _single_stake_view(
+    session_factory: async_sessionmaker[AsyncSession],
+    telegram_id: int,
+    odds_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
+    async with session_factory() as session:
+        odds = await session.scalar(
+            select(OddsSnapshot)
+            .where(OddsSnapshot.id == odds_id)
+            .options(selectinload(OddsSnapshot.market).selectinload(Market.match))
+        )
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
+    if not odds:
+        raise BettingError("Коефіцієнт не знайдено.")
+    if not user:
+        raise BettingError("Спочатку натисни /start.")
+    text = (
+        "Одиночна ставка:\n"
+        f"{match_title(odds.market.match)}\n"
+        f"{odds_line(odds)}\n\n"
+        f"💵 Доступний баланс: {format_money(user.balance_cents)}\n\n"
+        "Обери суму кнопкою або напиши свою суму повідомленням, наприклад 4 або 4.50:"
+    )
+    return text, stake_keyboard(odds.id, odds.market.match_id)
+
+
 async def _bet_confirmation_view(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
+    telegram_id: int,
     odds_id: int,
     stake_cents: int,
 ) -> tuple[str, InlineKeyboardMarkup]:
@@ -1060,8 +1087,13 @@ async def _bet_confirmation_view(
             .where(OddsSnapshot.id == odds_id)
             .options(selectinload(OddsSnapshot.market).selectinload(Market.match))
         )
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not odds:
         raise BettingError("Такий варіант ставки не знайдено.")
+    if not user:
+        raise BettingError("Спочатку натисни /start.")
+    if user.balance_cents < stake_cents:
+        raise BettingError("Недостатньо коштів на балансі.")
 
     match = odds.market.match
     close_at = _aware_utc(match.kickoff_at) - timedelta(minutes=settings.bet_close_minutes)
@@ -1075,7 +1107,9 @@ async def _bet_confirmation_view(
         f"{match_title(match)}\n"
         f"{_market_name(odds.market)} · {odds.selection} @ {format_decimal(odds.decimal_odds)}\n\n"
         f"Сума: {format_cents(stake_cents)}\n"
-        f"Можливий виграш: {format_cents(potential_payout)}"
+        f"Можливий виграш: {format_cents(potential_payout)}\n"
+        f"Баланс до ставки: {format_cents(user.balance_cents)}\n"
+        f"Після ставки: {format_cents(user.balance_cents - stake_cents)}"
     )
     return text, confirm_bet_keyboard(odds.id, stake_cents, odds.market.match_id)
 
@@ -1188,10 +1222,15 @@ async def _express_stake_view(
 ) -> tuple[str, InlineKeyboardMarkup]:
     async with session_factory() as session:
         slip = await get_bet_slip(session, telegram_id)
+        user = await session.scalar(select(User).where(User.telegram_id == telegram_id))
     if not slip or len(slip.items) < 2:
         raise BettingError("Для експресу потрібно мінімум 2 події.")
+    if not user:
+        raise BettingError("Спочатку натисни /start.")
     return (
-        _bet_slip_text(slip) + "\n\nОбери суму експресу або введи свою.",
+        _bet_slip_text(slip)
+        + f"\n\n💵 Доступний баланс: {format_money(user.balance_cents)}"
+        + "\nОбери суму експресу або введи свою.",
         express_stake_keyboard(),
     )
 
@@ -1221,6 +1260,8 @@ async def _express_confirmation_view(
         + "\n\n✅ Підтверди експрес"
         + f"\n💵 Сума: {format_money(stake_cents)}"
         + f"\n🏆 Можливий виграш: {format_money(potential)}"
+        + f"\nБаланс до ставки: {format_money(user.balance_cents)}"
+        + f"\nПісля ставки: {format_money(user.balance_cents - stake_cents)}"
     )
     return text, confirm_express_keyboard(stake_cents)
 
@@ -1286,9 +1327,12 @@ async def _open_settlement_target_ids(
     ).all()
     express_bet_ids = (
         await session.scalars(
-            select(ExpressBetItem.express_bet_id).where(
+            select(ExpressBetItem.express_bet_id)
+            .join(ExpressBet, ExpressBet.id == ExpressBetItem.express_bet_id)
+            .where(
                 ExpressBetItem.match_id == match_id,
                 ExpressBetItem.status == BetStatus.open,
+                ExpressBet.status == BetStatus.open,
             )
         )
     ).all()

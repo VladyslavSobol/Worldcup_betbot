@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.odds_api import OddsEvent, OddsOutcome
 from app.integrations.providers import OddsProvider, ScoreEvent
-from app.models import Bet, BetStatus, ExpressBetItem, Market, MarketStatus, MarketType, Match, MatchStatus, OddsSnapshot, utcnow
+from app.models import Bet, BetStatus, ExpressBet, ExpressBetItem, Market, MarketStatus, MarketType, Match, MatchStatus, OddsSnapshot, utcnow
 from app.services.betting import settle_match
 from app.team_names import canonical_team_name
 
@@ -51,16 +51,26 @@ async def sync_scores_with_results(
         matches = await _find_matches_for_score(session, event)
         for match in matches:
             if match.status in {
-                MatchStatus.finished,
                 MatchStatus.canceled,
                 MatchStatus.postponed,
             }:
+                continue
+            advancing_team = _advancing_team_for_match(event, match)
+            if match.status == MatchStatus.finished and not (
+                advancing_team and await _has_open_qualification_market(session, match.id)
+            ):
                 continue
             home_goals, away_goals = _score_values(event, match)
             if home_goals is None or away_goals is None:
                 continue
             single_bet_ids, express_bet_ids = await _open_settlement_target_ids(session, match.id)
-            settled_count = await settle_match(session, match.id, home_goals, away_goals)
+            settled_count = await settle_match(
+                session,
+                match.id,
+                home_goals,
+                away_goals,
+                advancing_team=advancing_team,
+            )
             results.append(
                 ScoreSettlementResult(
                     match_id=match.id,
@@ -85,9 +95,12 @@ async def _open_settlement_target_ids(
     ).all()
     express_bet_ids = (
         await session.scalars(
-            select(ExpressBetItem.express_bet_id).where(
+            select(ExpressBetItem.express_bet_id)
+            .join(ExpressBet, ExpressBet.id == ExpressBetItem.express_bet_id)
+            .where(
                 ExpressBetItem.match_id == match_id,
                 ExpressBetItem.status == BetStatus.open,
+                ExpressBet.status == BetStatus.open,
             )
         )
     ).all()
@@ -185,6 +198,7 @@ def _market_type(key: str) -> MarketType | None:
         "totals": MarketType.totals,
         "spreads": MarketType.spreads,
         "btts": MarketType.btts,
+        "to_qualify": MarketType.to_qualify,
         "outrights": MarketType.outrights,
     }
     return mapping.get(key)
@@ -204,7 +218,7 @@ def _selection_for_match(
 ) -> str:
     if market_type == MarketType.totals:
         return outcome.selection.title()
-    if market_type in {MarketType.h2h, MarketType.spreads}:
+    if market_type in {MarketType.h2h, MarketType.spreads, MarketType.to_qualify}:
         if canonical_team_name(outcome.selection) == canonical_team_name(event.home_team):
             return match.home_team
         if canonical_team_name(outcome.selection) == canonical_team_name(event.away_team):
@@ -322,6 +336,30 @@ def _score_values(
         return event.home_score, event.away_score
     score_map = _score_map(event)
     return score_map.get(match.home_team), score_map.get(match.away_team)
+
+
+def _advancing_team_for_match(
+    event: ScoreEvent | dict,
+    match: Match,
+) -> str | None:
+    if not isinstance(event, ScoreEvent) or not event.advancing_team:
+        return None
+    if canonical_team_name(event.advancing_team) == canonical_team_name(event.home_team):
+        return match.home_team
+    if canonical_team_name(event.advancing_team) == canonical_team_name(event.away_team):
+        return match.away_team
+    return None
+
+
+async def _has_open_qualification_market(session: AsyncSession, match_id: int) -> bool:
+    market_id = await session.scalar(
+        select(Market.id).where(
+            Market.match_id == match_id,
+            Market.type == MarketType.to_qualify,
+            Market.status == MarketStatus.open,
+        )
+    )
+    return market_id is not None
 
 
 def _normalize_team(name: str) -> str:

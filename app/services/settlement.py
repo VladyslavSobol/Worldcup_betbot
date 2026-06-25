@@ -73,9 +73,9 @@ def settle_selection(
             return _status(not both_scored)
         raise ValueError(f"Unsupported BTTS selection: {selection}")
 
-    if market_type == MarketType.outrights:
+    if market_type in {MarketType.outrights, MarketType.to_qualify}:
         if outright_winner is None:
-            raise ValueError("Outright settlement requires an outright winner")
+            raise ValueError(f"{market_type.value} settlement requires an outright winner")
         return _status(selection == outright_winner)
 
     raise ValueError(f"Manual settlement required for market type {market_type.value}")

@@ -19,6 +19,7 @@ class ScoreEvent:
     completed: bool
     home_score: int | None
     away_score: int | None
+    advancing_team: str | None = None
 
 
 class OddsProvider(Protocol):
