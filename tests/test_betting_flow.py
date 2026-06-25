@@ -31,11 +31,12 @@ async def _seed_odds(session, api_id: str, selection: str = "Brazil") -> OddsSna
     return odds
 
 
-def test_group_keyboards_only_show_three_approved_actions():
+def test_group_keyboards_show_approved_actions_and_leaderboard():
     expected = [
         "🎯 Ставити в приваті",
         "📅 Ставки на сьогодні",
         "👀 Відкриті ставки",
+        "🏆 Лідерборд",
     ]
 
     for keyboard in (group_menu_keyboard(), group_private_keyboard()):

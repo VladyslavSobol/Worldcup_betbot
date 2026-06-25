@@ -41,6 +41,7 @@ def group_menu_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🎯 Ставити в приваті", url=BOT_PRIVATE_URL)],
             [InlineKeyboardButton(text="📅 Ставки на сьогодні", url=BOT_PRIVATE_URL)],
             [InlineKeyboardButton(text="👀 Відкриті ставки", callback_data="u:openbets")],
+            [InlineKeyboardButton(text="🏆 Лідерборд", callback_data="u:board")],
         ]
     )
 
