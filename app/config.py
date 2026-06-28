@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     min_stake_cents: int = Field(default=100)
     max_stake_cents: int = Field(default=2500)
     starting_balance_cents: int = Field(default=10000)
+    playoff_bonus_cents: int = Field(default=10000)
     app_timezone: str = Field(default="Europe/Kyiv")
 
     @property

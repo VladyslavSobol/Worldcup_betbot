@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import Select, delete, func, select, update
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -45,11 +45,13 @@ async def get_or_create_user(
         user.username = username
         user.first_name = first_name
         return user
+    playoff_bonus_cents = max(settings.playoff_bonus_cents, 0)
     user = User(
         telegram_id=telegram_id,
         username=username,
         first_name=first_name,
-        balance_cents=settings.starting_balance_cents,
+        balance_cents=settings.starting_balance_cents + playoff_bonus_cents,
+        playoff_bonus_cents=playoff_bonus_cents,
     )
     session.add(user)
     await session.flush()
@@ -534,10 +536,10 @@ async def reset_test_state(session: AsyncSession, settings: Settings) -> tuple[i
     await session.execute(delete(BetSlip))
     await session.execute(delete(ExpressBet))
     bets_result = await session.execute(delete(Bet))
-    users_result = await session.execute(
-        update(User).values(balance_cents=settings.starting_balance_cents)
-    )
-    return int(bets_result.rowcount or 0), int(users_result.rowcount or 0)
+    users = (await session.scalars(select(User))).all()
+    for user in users:
+        user.balance_cents = settings.starting_balance_cents + user.playoff_bonus_cents
+    return int(bets_result.rowcount or 0), len(users)
 
 
 async def reset_user_state(
@@ -559,9 +561,30 @@ async def reset_user_state(
     await session.execute(delete(BetSlip).where(BetSlip.user_id == user.id))
     await session.execute(delete(ExpressBet).where(ExpressBet.user_id == user.id))
     bets_result = await session.execute(delete(Bet).where(Bet.user_id == user.id))
-    user.balance_cents = settings.starting_balance_cents
+    user.balance_cents = settings.starting_balance_cents + user.playoff_bonus_cents
     await session.flush()
     return user, int(bets_result.rowcount or 0)
+
+
+async def grant_playoff_bonus(session: AsyncSession, settings: Settings) -> tuple[int, int]:
+    target_bonus = max(settings.playoff_bonus_cents, 0)
+    if target_bonus <= 0:
+        return 0, 0
+
+    users = (await session.scalars(select(User))).all()
+    changed = 0
+    granted_total = 0
+    for user in users:
+        current_bonus = user.playoff_bonus_cents or 0
+        missing_bonus = target_bonus - current_bonus
+        if missing_bonus <= 0:
+            continue
+        user.balance_cents += missing_bonus
+        user.playoff_bonus_cents = target_bonus
+        changed += 1
+        granted_total += missing_bonus
+    await session.flush()
+    return changed, granted_total
 
 
 async def leaderboard(session: AsyncSession) -> list[tuple[User, int, int]]:

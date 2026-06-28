@@ -18,7 +18,21 @@ async def init_db(session_factory: async_sessionmaker[AsyncSession]) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if engine.dialect.name == "postgresql":
-            for value in ("btts", "double_chance"):
+            await conn.execute(
+                text(
+                    "ALTER TABLE users "
+                    "ADD COLUMN IF NOT EXISTS playoff_bonus_cents INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+        elif engine.dialect.name == "sqlite":
+            columns = await conn.execute(text("PRAGMA table_info(users)"))
+            column_names = {row[1] for row in columns}
+            if "playoff_bonus_cents" not in column_names:
+                await conn.execute(
+                    text("ALTER TABLE users ADD COLUMN playoff_bonus_cents INTEGER NOT NULL DEFAULT 0")
+                )
+        if engine.dialect.name == "postgresql":
+            for value in ("btts", "double_chance", "to_qualify"):
                 await conn.execute(
                     text(f"ALTER TYPE markettype ADD VALUE IF NOT EXISTS '{value}'")
                 )

@@ -103,7 +103,7 @@ def test_double_chance_and_spread_labels_are_clear():
 
     assert "П1 або нічия" in odds_button_label(home_or_draw)
     assert "П2 або нічия" in odds_button_label(away_or_draw)
-    assert market_block_title(spread) == "📏 Фора +1.5 / -1.5"
+    assert market_block_title(spread) == "📏 Фора +1.5 / -1.5 (90 хв)"
 
 
 def test_betting_explanation_includes_new_markets():
@@ -111,6 +111,8 @@ def test_betting_explanation_includes_new_markets():
 
     assert "Подвійний шанс" in text
     assert "Обидві заб’ють" in text
+    assert "Основний час" in text
+    assert "Прохід далі" in text
 
 
 def test_spread_block_keeps_only_latest_complete_team_pair():
@@ -134,3 +136,38 @@ def test_spread_block_keeps_only_latest_complete_team_pair():
         ("South Africa", Decimal("-1.5")),
         ("Korea Republic", Decimal("1.5")),
     ]
+
+
+def test_market_titles_explain_settlement_scope_for_playoff_markets():
+    match = Match(
+        id=1,
+        api_id="odds_api_io:1",
+        home_team="South Africa",
+        away_team="Korea Republic",
+        kickoff_at=datetime.now(timezone.utc),
+    )
+
+    assert market_block_title([_option(match, MarketType.h2h, "South Africa", "6.25")]) == (
+        "🏆 Результат матчу (90 хв)"
+    )
+    assert market_block_title([_option(match, MarketType.double_chance, "1X", "2.20")]) == (
+        "🛡 Подвійний шанс (90 хв)"
+    )
+    assert market_block_title([_option(match, MarketType.totals, "Over", "1.90", "2.5")]) == (
+        "⚽ Тотал 2.5 (90 хв)"
+    )
+    assert market_block_title([_option(match, MarketType.btts, "Yes", "1.92")]) == (
+        "🥅 Обидві заб’ють (90 хв)"
+    )
+    assert market_block_title([_option(match, MarketType.to_qualify, "South Africa", "2.10")]) == (
+        "🏁 Прохід далі (з овертаймом/пенальті)"
+    )
+
+
+def test_betting_explanation_separates_regular_time_and_qualification():
+    text = _explain_text()
+
+    assert "Основний час" in text
+    assert "Прохід далі" in text
+    assert "овертайм" in text
+    assert "пенальті" in text

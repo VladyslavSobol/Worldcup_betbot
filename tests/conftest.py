@@ -13,6 +13,7 @@ def settings() -> Settings:
         database_url="sqlite+aiosqlite:///:memory:",
         telegram_bot_token="test-token",
         starting_balance_cents=10000,
+        playoff_bonus_cents=0,
         min_stake_cents=100,
         max_stake_cents=2500,
     )

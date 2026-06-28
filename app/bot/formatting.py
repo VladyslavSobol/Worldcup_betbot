@@ -276,18 +276,18 @@ def market_block_title(block: list[OddsSnapshot]) -> str:
         return ""
     market_type = block[0].market.type
     if market_type == MarketType.h2h:
-        return "🏆 Результат матчу"
+        return "🏆 Результат матчу (90 хв)"
     if market_type == MarketType.double_chance:
-        return "🛡 Подвійний шанс"
+        return "🛡 Подвійний шанс (90 хв)"
     if market_type == MarketType.to_qualify:
-        return "🏁 Прохід далі"
+        return "🏁 Прохід далі (з овертаймом/пенальті)"
     if market_type == MarketType.totals:
-        return f"⚽ {market_title(block[0])}"
+        return f"⚽ {market_title(block[0])} (90 хв)"
     if market_type == MarketType.spreads:
         line = abs(block[0].market.line or 0)
-        return f"📏 Фора +{format_decimal(line)} / -{format_decimal(line)}"
+        return f"📏 Фора +{format_decimal(line)} / -{format_decimal(line)} (90 хв)"
     if market_type == MarketType.btts:
-        return "🥅 Обидві заб’ють"
+        return "🥅 Обидві заб’ють (90 хв)"
     return market_title(block[0])
 
 
@@ -468,7 +468,7 @@ def format_leaderboard_entry(
 ) -> str:
     place = _rank_label(rank)
     indent = "" if rank <= 3 else "   "
-    profit = bankroll_cents - starting_balance_cents
+    profit = bankroll_cents - starting_balance_cents - (user.playoff_bonus_cents or 0)
     return "\n".join(
         [
             f"{place} {user_label(user)}",

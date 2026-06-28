@@ -1,5 +1,5 @@
 from app.config import Settings
-from app.integrations.odds_api_io import OddsApiIoClient
+from app.integrations.odds_api_io import OddsApiIoClient, _parse_odds_event
 
 
 def _settings():
@@ -105,6 +105,38 @@ async def test_fetch_odds_filters_world_cup_and_maps_supported_markets():
         "Canada",
     ]
     assert [outcome.selection for outcome in event.markets[5].outcomes] == ["Yes", "No"]
+
+
+def test_parse_qualification_market_from_team_rows():
+    raw_event = {
+        "id": 101,
+        "home": "Argentina",
+        "away": "France",
+        "date": "2026-06-30T20:00:00Z",
+    }
+    odds_row = {
+        "id": 101,
+        "bookmakers": {
+            "Unibet": [
+                {
+                    "name": "To Qualify - Including Overtime and Penalties",
+                    "odds": [
+                        {"name": "Argentina", "price": 1.80},
+                        {"name": "France", "price": 2.05},
+                    ],
+                }
+            ]
+        },
+    }
+
+    event = _parse_odds_event(raw_event, odds_row, "Unibet")
+
+    assert len(event.markets) == 1
+    assert event.markets[0].key == "to_qualify"
+    assert [outcome.selection for outcome in event.markets[0].outcomes] == [
+        "Argentina",
+        "France",
+    ]
 
 
 async def test_fetch_odds_batches_ten_events_per_request():

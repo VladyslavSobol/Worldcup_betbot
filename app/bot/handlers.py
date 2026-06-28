@@ -63,6 +63,7 @@ from app.services.betting import (
     close_match_markets,
     get_bet_slip,
     get_or_create_user,
+    grant_playoff_bonus,
     leaderboard,
     place_bet,
     place_express_bet,
@@ -767,7 +768,22 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
         await message.answer(
             f"Користувача {user_label(user)} обнулено.\n"
             f"Видалено ставок: {bets_deleted}.\n"
-            f"Баланс: {format_cents(settings.starting_balance_cents)}."
+            f"Баланс: {format_cents(settings.starting_balance_cents + user.playoff_bonus_cents)}."
+        )
+
+    @router.message(Command("admin_playoff_bonus"))
+    async def admin_playoff_bonus(message: Message) -> None:
+        if not _is_admin(message, settings):
+            await message.answer("Ця команда тільки для адміна.")
+            return
+        async with session_factory() as session:
+            users_changed, total_granted = await grant_playoff_bonus(session, settings)
+            await session.commit()
+        await message.answer(
+            "Плейоф-бонус нараховано.\n\n"
+            f"Гравців оновлено: {users_changed}.\n"
+            f"Додано всього: {format_cents(total_granted)}.\n"
+            "Бонус не рахується як профіт у статистиці."
         )
 
     @router.message(Command("admin_sync"))
@@ -899,6 +915,9 @@ async def _odds_view(
         "🟢 Ставки відкриті",
         "",
         "👇 Натисніть потрібний коефіцієнт. Після цього бот покаже підтвердження ставки.",
+        "",
+        "ℹ️ 1X2, подвійний шанс, тотали, фори й обидві заб’ють рахуються за 90 хв.",
+        "🏁 Прохід далі рахується з овертаймом і пенальті.",
         "",
     ]
     for block in page_blocks:
@@ -1724,7 +1743,7 @@ async def _balance_text(
         )
         open_stakes = open_single_stakes + open_express_stakes
     bankroll = user.balance_cents + open_stakes
-    profit = bankroll - settings.starting_balance_cents
+    profit = bankroll - _user_profit_baseline_cents(user, settings)
     return (
         "Твій баланс:\n\n"
         f"Доступно: {format_cents(user.balance_cents)}\n"
@@ -1765,7 +1784,7 @@ async def _stats_text(
     win_rate = int(round((won_count / settled_count) * 100)) if settled_count else 0
     open_stakes = sum(bet.stake_cents for bet in open_bets) + sum(express.stake_cents for express in open_express_bets)
     bankroll = user.balance_cents + open_stakes
-    profit = bankroll - settings.starting_balance_cents
+    profit = bankroll - _user_profit_baseline_cents(user, settings)
     odds_values = [Decimal(bet.locked_decimal_odds) for bet in bets] + [
         Decimal(express.total_odds) for express in express_bets
     ]
@@ -1872,6 +1891,10 @@ async def _leaderboard_text(
     return format_leaderboard(rows, settings.starting_balance_cents, limit=5)
 
 
+def _user_profit_baseline_cents(user: User, settings: Settings) -> int:
+    return settings.starting_balance_cents + (user.playoff_bonus_cents or 0)
+
+
 def _profit_text(cents: int) -> str:
     return format_profit(cents)
 
@@ -1907,6 +1930,9 @@ def _rules_text(settings: Settings) -> str:
 def _explain_text() -> str:
     return (
         "Пояснення ставок:\n\n"
+        "Основний час\n"
+        "1X2, подвійний шанс, тотали, фори й обидві заб’ють рахуються тільки за 90 хвилин + компенсований час.\n"
+        "Овертайм і пенальті для цих ставок не враховуються.\n\n"
         "1X2\n"
         "Ставка на результат матчу в основний час.\n"
         "1 - виграє перша команда, X - нічия, 2 - виграє друга команда.\n\n"
@@ -1926,6 +1952,9 @@ def _explain_text() -> str:
         "Обидві заб’ють\n"
         "Так - обидві команди мають забити хоча б по одному голу в основний час.\n"
         "Ні - хоча б одна команда не повинна забити.\n\n"
+        "Прохід далі\n"
+        "Ставка на команду, яка пройде в наступний раунд плейофу.\n"
+        "Тут враховується все: основний час, овертайм і серія пенальті.\n\n"
         "Коефіцієнт\n"
         "Якщо поставив $4 на коефіцієнт 2.50 і ставка виграла, отримаєш $10.00. "
         "Чистий плюс буде $6.00, бо $4 вже були списані при ставці."

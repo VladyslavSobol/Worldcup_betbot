@@ -140,19 +140,9 @@ def _parse_market(
             _outcome("1X", _first_value(row, "homeDraw", "1X", "1x")),
             _outcome("X2", _first_value(row, "awayDraw", "X2", "x2")),
         ]
-    elif normalized_name in {
-        "to qualify",
-        "to advance",
-        "qualification",
-        "team to qualify",
-        "winner incl. overtime",
-    } and rows:
+    elif _is_qualification_market(normalized_name) and rows:
         key = "to_qualify"
-        row = rows[0]
-        outcomes = [
-            _outcome(home_team, _first_value(row, "home", "team1", "1")),
-            _outcome(away_team, _first_value(row, "away", "team2", "2")),
-        ]
+        outcomes = _qualification_outcomes(rows, home_team, away_team)
     elif name == "Both Teams To Score" and rows:
         key = "btts"
         row = rows[0]
@@ -248,6 +238,45 @@ def _first_value(row: dict[str, Any], *keys: str):
         if row.get(key) not in {None, "", "N/A"}:
             return row[key]
     return None
+
+
+def _is_qualification_market(normalized_name: str) -> bool:
+    return (
+        "qualif" in normalized_name
+        or "to advance" in normalized_name
+        or "advance to" in normalized_name
+        or "winner incl" in normalized_name
+        or "including overtime" in normalized_name
+    )
+
+
+def _qualification_outcomes(
+    rows: list[dict[str, Any]],
+    home_team: str,
+    away_team: str,
+) -> list[OddsOutcome | None]:
+    outcomes: list[OddsOutcome | None] = []
+    for row in rows:
+        name = str(row.get("name") or row.get("team") or row.get("selection") or "")
+        price = _first_value(row, "price", "odds", "value")
+        if name and price is not None:
+            if _same_team(name, home_team):
+                outcomes.append(_outcome(home_team, price))
+            elif _same_team(name, away_team):
+                outcomes.append(_outcome(away_team, price))
+
+    if outcomes:
+        return outcomes
+
+    row = rows[0]
+    return [
+        _outcome(home_team, _first_value(row, "home", "team1", "1", home_team)),
+        _outcome(away_team, _first_value(row, "away", "team2", "2", away_team)),
+    ]
+
+
+def _same_team(left: str, right: str) -> bool:
+    return " ".join(left.casefold().split()) == " ".join(right.casefold().split())
 
 
 def _advancing_team(

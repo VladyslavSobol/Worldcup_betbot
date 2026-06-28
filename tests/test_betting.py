@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import delete, select
 
-from app.bot.handlers import _leaderboard_text, _openbets_text, _topwins_text
+from app.bot.handlers import _balance_text, _leaderboard_text, _openbets_text, _stats_text, _topwins_text
 from app.models import (
     Bet,
     BetStatus,
@@ -22,6 +22,7 @@ from app.models import (
 from app.services.betting import (
     BettingError,
     add_to_bet_slip,
+    grant_playoff_bonus,
     get_or_create_user,
     leaderboard,
     place_bet,
@@ -43,6 +44,46 @@ async def test_user_gets_starting_balance(session_factory, settings):
         await session.commit()
 
     assert user.balance_cents == 10000
+
+
+async def test_new_user_gets_configured_playoff_bonus(session_factory, settings):
+    settings.playoff_bonus_cents = 10000
+    async with session_factory() as session:
+        user = await get_or_create_user(session, 10, "friend", "Friend", settings)
+        await session.commit()
+
+    assert user.balance_cents == 20000
+    assert user.playoff_bonus_cents == 10000
+
+
+async def test_playoff_bonus_adds_balance_without_profit_and_is_idempotent(session_factory, settings):
+    settings.playoff_bonus_cents = 10000
+    async with session_factory() as session:
+        first = await get_or_create_user(session, 1, "first", "First", settings)
+        second = await get_or_create_user(session, 2, "second", "Second", settings)
+        first.balance_cents = 10000
+        first.playoff_bonus_cents = 0
+        second.balance_cents = 14000
+        second.playoff_bonus_cents = 5000
+
+        changed, total = await grant_playoff_bonus(session, settings)
+        changed_again, total_again = await grant_playoff_bonus(session, settings)
+        await session.commit()
+
+    assert (changed, total) == (2, 15000)
+    assert (changed_again, total_again) == (0, 0)
+    assert first.balance_cents == 20000
+    assert first.playoff_bonus_cents == 10000
+    assert second.balance_cents == 19000
+    assert second.playoff_bonus_cents == 10000
+
+    leaderboard_text = await _leaderboard_text(session_factory, settings)
+    stats_text = await _stats_text(session_factory, first.telegram_id, settings)
+    balance_text = await _balance_text(session_factory, first.telegram_id, settings)
+
+    assert "Профіт: $0.00" in leaderboard_text
+    assert "Банкрол: $200.00 ($0.00)" in stats_text
+    assert "Плюс/мінус: $0.00" in balance_text
 
 
 async def test_place_bet_deducts_balance_and_locks_odds(session_factory, settings):
