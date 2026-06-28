@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from app.config import Settings
 from app.integrations.odds_api_io import OddsApiIoClient, _parse_odds_event
 
@@ -136,6 +138,38 @@ def test_parse_qualification_market_from_team_rows():
     assert [outcome.selection for outcome in event.markets[0].outcomes] == [
         "Argentina",
         "France",
+    ]
+
+
+def test_parse_qualification_market_with_case_insensitive_bookmaker_and_label_odds_rows():
+    raw_event = {
+        "id": 102,
+        "home": "South Africa",
+        "away": "Canada",
+        "date": "2026-06-30T20:00:00Z",
+    }
+    odds_row = {
+        "id": 102,
+        "bookmakers": {
+            "unibet": [
+                {
+                    "name": "To Qualify",
+                    "odds": [
+                        {"label": "South Africa", "odd": 3.30},
+                        {"label": "Canada", "odd": 1.30},
+                    ],
+                }
+            ]
+        },
+    }
+
+    event = _parse_odds_event(raw_event, odds_row, "Unibet")
+
+    assert len(event.markets) == 1
+    assert event.markets[0].key == "to_qualify"
+    assert [(outcome.selection, outcome.price) for outcome in event.markets[0].outcomes] == [
+        ("South Africa", Decimal("3.30")),
+        ("Canada", Decimal("1.30")),
     ]
 
 

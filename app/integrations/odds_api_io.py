@@ -74,7 +74,7 @@ def _parse_odds_event(
     bookmaker_names = [name.strip() for name in configured_bookmakers.split(",") if name.strip()]
     bookmakers = odds_row.get("bookmakers") or {}
     for bookmaker_name in bookmaker_names:
-        raw_markets = bookmakers.get(bookmaker_name) or []
+        raw_markets = _bookmaker_markets(bookmakers, bookmaker_name)
         for market in raw_markets:
             parsed = _parse_market(market, bookmaker_name, home_team, away_team)
             if parsed:
@@ -240,6 +240,17 @@ def _first_value(row: dict[str, Any], *keys: str):
     return None
 
 
+def _bookmaker_markets(bookmakers: dict[str, Any], configured_name: str) -> list[dict[str, Any]]:
+    direct = bookmakers.get(configured_name)
+    if direct is not None:
+        return direct
+    normalized_config = _normalize_text(configured_name)
+    for bookmaker_name, markets in bookmakers.items():
+        if _normalize_text(str(bookmaker_name)) == normalized_config:
+            return markets
+    return []
+
+
 def _is_qualification_market(normalized_name: str) -> bool:
     return (
         "qualif" in normalized_name
@@ -257,8 +268,16 @@ def _qualification_outcomes(
 ) -> list[OddsOutcome | None]:
     outcomes: list[OddsOutcome | None] = []
     for row in rows:
-        name = str(row.get("name") or row.get("team") or row.get("selection") or "")
-        price = _first_value(row, "price", "odds", "value")
+        name = str(
+            row.get("name")
+            or row.get("team")
+            or row.get("selection")
+            or row.get("label")
+            or row.get("participant")
+            or row.get("selectionName")
+            or ""
+        )
+        price = _first_value(row, "price", "odds", "value", "odd", "decimal", "decimalOdds")
         if name and price is not None:
             if _same_team(name, home_team):
                 outcomes.append(_outcome(home_team, price))
@@ -276,7 +295,11 @@ def _qualification_outcomes(
 
 
 def _same_team(left: str, right: str) -> bool:
-    return " ".join(left.casefold().split()) == " ".join(right.casefold().split())
+    return _normalize_text(left) == _normalize_text(right)
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.casefold().split())
 
 
 def _advancing_team(
