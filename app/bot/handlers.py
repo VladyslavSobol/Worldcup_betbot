@@ -764,6 +764,60 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
         except (ValueError, BettingError) as exc:
             await message.answer(str(exc))
 
+    @router.message(Command("admin_qualify_bulk"))
+    async def admin_qualify_bulk(message: Message) -> None:
+        if not _is_admin(message, settings):
+            await message.answer("Ця команда тільки для адміна.")
+            return
+        try:
+            rows = _parse_qualify_bulk_lines(message.text or "")
+        except ValueError as exc:
+            await message.answer(str(exc))
+            return
+        if not rows:
+            await message.answer(
+                "Формат:\n"
+                "/admin_qualify_bulk\n"
+                "49 1.56 2.39\n"
+                "41 1.16 5.00"
+            )
+            return
+
+        updated: list[str] = []
+        errors: list[str] = []
+        async with session_factory() as session:
+            for match_id, home_odds, away_odds in rows:
+                try:
+                    snapshots = await set_manual_qualification_odds(
+                        session,
+                        match_id,
+                        home_odds,
+                        away_odds,
+                    )
+                    match = await session.scalar(select(Match).where(Match.id == match_id))
+                    updated.append(
+                        f"#{match_id} {match_title(match)}: "
+                        f"{format_odds(snapshots[0].decimal_odds)} / "
+                        f"{format_odds(snapshots[1].decimal_odds)}"
+                    )
+                except (ValueError, BettingError) as exc:
+                    errors.append(f"#{match_id}: {exc}")
+            await session.commit()
+
+        lines = [
+            "Коефіцієнти на прохід оновлено пачкою.",
+            "",
+            f"Оновлено: {len(updated)}",
+        ]
+        if updated:
+            lines.append("")
+            lines.extend(updated)
+        if errors:
+            lines.append("")
+            lines.append("Помилки:")
+            lines.extend(errors)
+        await message.answer("\n".join(lines))
+
     @router.message(Command("admin_advance"))
     async def admin_advance(message: Message, bot: Bot) -> None:
         if not _is_admin(message, settings):
@@ -2170,6 +2224,27 @@ def _looks_like_amount(text: str | None) -> bool:
 
 def _normalize_amount(text: str | None) -> str:
     return (text or "").strip().replace(",", ".")
+
+
+def _parse_qualify_bulk_lines(text: str) -> list[tuple[int, Decimal, Decimal]]:
+    rows: list[tuple[int, Decimal, Decimal]] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("/admin_qualify_bulk"):
+            continue
+        parts = line.split()
+        if len(parts) != 3:
+            raise ValueError(
+                f"Рядок {line_number}: потрібно 3 значення: <id_матчу> <кеф_1> <кеф_2>."
+            )
+        try:
+            match_id = int(parts[0])
+            home_odds = Decimal(_normalize_amount(parts[1]))
+            away_odds = Decimal(_normalize_amount(parts[2]))
+        except ValueError as exc:
+            raise ValueError(f"Рядок {line_number}: некоректний id матчу або коефіцієнт.") from exc
+        rows.append((match_id, home_odds, away_odds))
+    return rows
 
 
 def _is_admin(message: Message, settings: Settings) -> bool:

@@ -6,7 +6,14 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import delete, select
 
-from app.bot.handlers import _balance_text, _leaderboard_text, _openbets_text, _stats_text, _topwins_text
+from app.bot.handlers import (
+    _balance_text,
+    _leaderboard_text,
+    _openbets_text,
+    _parse_qualify_bulk_lines,
+    _stats_text,
+    _topwins_text,
+)
 from app.models import (
     Bet,
     BetStatus,
@@ -500,6 +507,27 @@ async def test_manual_qualification_odds_create_two_open_team_prices(session_fac
     assert snapshots[0].market.type == MarketType.to_qualify
     assert snapshots[0].market.status == MarketStatus.open
     assert snapshots[0].market.source == "manual"
+
+
+def test_parse_qualify_bulk_lines_accepts_multiple_rows():
+    rows = _parse_qualify_bulk_lines(
+        "/admin_qualify_bulk\n"
+        "49 1.56 2.39\n"
+        "41 1.16 5.00\n"
+        "\n"
+        "50 1,14 5,40"
+    )
+
+    assert rows == [
+        (49, Decimal("1.56"), Decimal("2.39")),
+        (41, Decimal("1.16"), Decimal("5.00")),
+        (50, Decimal("1.14"), Decimal("5.40")),
+    ]
+
+
+def test_parse_qualify_bulk_lines_rejects_bad_rows():
+    with pytest.raises(ValueError, match="Рядок 2"):
+        _parse_qualify_bulk_lines("/admin_qualify_bulk\n49 1.56")
 
 
 async def test_settle_match_infers_qualification_winner_from_regulation_score(
