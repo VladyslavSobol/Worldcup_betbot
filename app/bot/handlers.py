@@ -1043,6 +1043,19 @@ async def _admin_matches_text(
                 .limit(30)
             )
         ).all()
+        qualification_match_ids = set(
+            (
+                await session.scalars(
+                    select(Market.match_id)
+                    .join(OddsSnapshot, OddsSnapshot.market_id == Market.id)
+                    .where(
+                        Market.type == MarketType.to_qualify,
+                        Market.status == MarketStatus.open,
+                    )
+                    .distinct()
+                )
+            ).all()
+        )
     if not matches:
         return "🏆 Матчі для адміна\n\nМатчів не знайдено."
 
@@ -1060,6 +1073,8 @@ async def _admin_matches_text(
             score = f" · {match.home_score}:{match.away_score}"
         lines.append(f"#{match.id} {match_title(match)}")
         lines.append(f"{kickoff} · {status}{score}")
+        qualification_status = "✅ є" if match.id in qualification_match_ids else "⚪ немає"
+        lines.append(f"Прохід: {qualification_status}")
         lines.append("")
     return "\n".join(lines).strip()
 

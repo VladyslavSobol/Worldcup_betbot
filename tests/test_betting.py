@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import delete, select
 
 from app.bot.handlers import (
+    _admin_matches_text,
     _balance_text,
     _leaderboard_text,
     _openbets_text,
@@ -528,6 +529,41 @@ def test_parse_qualify_bulk_lines_accepts_multiple_rows():
 def test_parse_qualify_bulk_lines_rejects_bad_rows():
     with pytest.raises(ValueError, match="Рядок 2"):
         _parse_qualify_bulk_lines("/admin_qualify_bulk\n49 1.56")
+
+
+async def test_admin_matches_text_shows_qualification_odds_status(session_factory):
+    kickoff = datetime.now(timezone.utc) + timedelta(days=1)
+    async with session_factory() as session:
+        with_odds = Match(
+            api_id="admin-match-with-qualify",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Brazil",
+            away_team="Japan",
+            kickoff_at=kickoff,
+        )
+        without_odds = Match(
+            api_id="admin-match-without-qualify",
+            sport_key="soccer_fifa_world_cup",
+            home_team="France",
+            away_team="Norway",
+            kickoff_at=kickoff + timedelta(hours=3),
+        )
+        session.add_all([with_odds, without_odds])
+        await session.flush()
+        await set_manual_qualification_odds(
+            session,
+            with_odds.id,
+            Decimal("1.40"),
+            Decimal("2.80"),
+        )
+        await session.commit()
+
+    text = await _admin_matches_text(session_factory)
+
+    assert f"#{with_odds.id} 🇧🇷 Brazil проти 🇯🇵 Japan" in text
+    assert f"#{without_odds.id} 🇫🇷 France проти 🇳🇴 Norway" in text
+    assert "Прохід: ✅ є" in text
+    assert "Прохід: ⚪ немає" in text
 
 
 async def test_settle_match_infers_qualification_winner_from_regulation_score(
