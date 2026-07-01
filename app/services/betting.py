@@ -27,6 +27,7 @@ from app.models import (
 )
 from app.money import payout_cents
 from app.services.settlement import settle_selection
+from app.team_names import canonical_team_name
 
 
 class BettingError(Exception):
@@ -310,6 +311,187 @@ def _ensure_match_is_open_for_betting(match: Match, market: Market, settings: Se
     if now >= close_at:
         raise BettingError("Прийом ставок на цей матч уже закрито.")
 
+
+async def set_manual_qualification_odds(
+    session: AsyncSession,
+    match_id: int,
+    home_odds: Decimal,
+    away_odds: Decimal,
+) -> list[OddsSnapshot]:
+    match = await session.scalar(select(Match).where(Match.id == match_id))
+    if not match:
+        raise BettingError("Матч не знайдено.")
+    home_price = _normalize_manual_odds(home_odds)
+    away_price = _normalize_manual_odds(away_odds)
+    market = await session.scalar(
+        select(Market).where(
+            Market.match_id == match_id,
+            Market.type == MarketType.to_qualify,
+            Market.line.is_(None),
+            Market.selection_scope.is_(None),
+        )
+    )
+    if not market:
+        market = Market(
+            match_id=match_id,
+            type=MarketType.to_qualify,
+            status=MarketStatus.open,
+            source="manual",
+        )
+        session.add(market)
+        await session.flush()
+    else:
+        market.status = MarketStatus.open
+        market.source = "manual"
+
+    snapshots = [
+        OddsSnapshot(
+            market_id=market.id,
+            selection=match.home_team,
+            decimal_odds=home_price,
+            source="manual",
+        ),
+        OddsSnapshot(
+            market_id=market.id,
+            selection=match.away_team,
+            decimal_odds=away_price,
+            source="manual",
+        ),
+    ]
+    session.add_all(snapshots)
+    await session.flush()
+    for snapshot in snapshots:
+        snapshot.market = market
+    market.match = match
+    return snapshots
+
+
+async def settle_qualification_market(
+    session: AsyncSession,
+    match_id: int,
+    advancing_team: str,
+    admin_telegram_id: int | None = None,
+) -> int:
+    match = await session.scalar(select(Match).where(Match.id == match_id))
+    if not match:
+        raise BettingError("Матч не знайдено.")
+    winner = _resolve_match_team(match, advancing_team)
+    home_score = match.home_score if match.home_score is not None else 0
+    away_score = match.away_score if match.away_score is not None else 0
+
+    bets = (
+        await session.scalars(
+            select(Bet)
+            .join(Market)
+            .where(
+                Bet.match_id == match_id,
+                Bet.status == BetStatus.open,
+                Market.type == MarketType.to_qualify,
+            )
+            .options(selectinload(Bet.market), selectinload(Bet.user))
+        )
+    ).all()
+    settled = 0
+    for bet in bets:
+        result = settle_selection(
+            market_type=MarketType.to_qualify,
+            selection=bet.selection,
+            home_team=match.home_team,
+            away_team=match.away_team,
+            home_score=home_score,
+            away_score=away_score,
+            outright_winner=winner,
+        )
+        bet.status = result.status
+        bet.settled_at = utcnow()
+        if result.status == BetStatus.won:
+            bet.payout_cents = payout_cents(bet.stake_cents, Decimal(bet.locked_decimal_odds))
+            bet.user.balance_cents += bet.payout_cents
+        else:
+            bet.payout_cents = 0
+        settled += 1
+
+    items = (
+        await session.scalars(
+            select(ExpressBetItem)
+            .join(Market)
+            .join(ExpressBet, ExpressBet.id == ExpressBetItem.express_bet_id)
+            .where(
+                ExpressBetItem.match_id == match_id,
+                ExpressBetItem.status == BetStatus.open,
+                ExpressBet.status == BetStatus.open,
+                Market.type == MarketType.to_qualify,
+            )
+            .options(
+                selectinload(ExpressBetItem.market),
+                selectinload(ExpressBetItem.express_bet).selectinload(ExpressBet.user),
+                selectinload(ExpressBetItem.express_bet).selectinload(ExpressBet.items),
+            )
+        )
+    ).all()
+    settled_express_ids: set[int] = set()
+    for item in items:
+        result = settle_selection(
+            market_type=MarketType.to_qualify,
+            selection=item.selection,
+            home_team=match.home_team,
+            away_team=match.away_team,
+            home_score=home_score,
+            away_score=away_score,
+            outright_winner=winner,
+        )
+        item.status = result.status
+        item.settled_at = utcnow()
+        if _settle_express_if_ready(item.express_bet):
+            settled_express_ids.add(item.express_bet.id)
+
+    for market in (
+        await session.scalars(
+            select(Market).where(
+                Market.match_id == match_id,
+                Market.type == MarketType.to_qualify,
+                Market.status == MarketStatus.open,
+            )
+        )
+    ).all():
+        market.status = MarketStatus.settled
+
+    session.add(
+        SettlementLog(
+            match_id=match_id,
+            admin_telegram_id=admin_telegram_id,
+            action="advance",
+            reason=winner,
+        )
+    )
+    await session.flush()
+    return settled + len(settled_express_ids)
+
+
+def _normalize_manual_odds(value: Decimal) -> Decimal:
+    odds = Decimal(value).quantize(Decimal("0.001"))
+    if odds <= Decimal("1.000"):
+        raise BettingError("Коефіцієнт має бути більший за 1.00.")
+    return odds
+
+
+def _resolve_match_team(match: Match, team: str) -> str:
+    normalized = canonical_team_name(team)
+    if normalized == canonical_team_name(match.home_team):
+        return match.home_team
+    if normalized == canonical_team_name(match.away_team):
+        return match.away_team
+    raise BettingError("Команда не збігається з учасниками матчу.")
+
+
+def _infer_advancing_team(match: Match, home_score: int, away_score: int) -> str | None:
+    if home_score > away_score:
+        return match.home_team
+    if away_score > home_score:
+        return match.away_team
+    return None
+
+
 async def settle_match(
     session: AsyncSession,
     match_id: int,
@@ -325,6 +507,10 @@ async def settle_match(
     match.away_score = away_score
     match.status = MatchStatus.finished
     match.updated_at = utcnow()
+    if advancing_team is None:
+        advancing_team = _infer_advancing_team(match, home_score, away_score)
+    else:
+        advancing_team = _resolve_match_team(match, advancing_team)
 
     bets = (
         await session.scalars(

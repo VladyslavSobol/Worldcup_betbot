@@ -70,6 +70,8 @@ from app.services.betting import (
     remove_from_bet_slip,
     reset_test_state,
     reset_user_state,
+    set_manual_qualification_odds,
+    settle_qualification_market,
     settle_match,
     void_match,
 )
@@ -722,6 +724,103 @@ def build_router(session_factory: async_sessionmaker[AsyncSession], settings: Se
         text = await _admin_debug_settlement_text(session_factory)
         await message.answer(text)
 
+    @router.message(Command("admin_matches"))
+    async def admin_matches(message: Message) -> None:
+        if not _is_admin(message, settings):
+            await message.answer("Ця команда тільки для адміна.")
+            return
+        text = await _admin_matches_text(session_factory)
+        await message.answer(text)
+
+    @router.message(Command("admin_qualify_odds"))
+    async def admin_qualify_odds(message: Message) -> None:
+        if not _is_admin(message, settings):
+            await message.answer("Ця команда тільки для адміна.")
+            return
+        args = _args(message)
+        if len(args) != 3:
+            await message.answer("Формат: /admin_qualify_odds <id_матчу> <кеф_1> <кеф_2>")
+            return
+        try:
+            match_id = int(args[0])
+            home_odds = Decimal(_normalize_amount(args[1]))
+            away_odds = Decimal(_normalize_amount(args[2]))
+            async with session_factory() as session:
+                snapshots = await set_manual_qualification_odds(
+                    session,
+                    match_id,
+                    home_odds,
+                    away_odds,
+                )
+                match = await session.scalar(select(Match).where(Match.id == match_id))
+                await session.commit()
+            await message.answer(
+                "Коефіцієнти на прохід оновлено.\n\n"
+                f"#{match_id} {match_title(match)}\n"
+                f"🏁 {snapshots[0].selection}: {format_odds(snapshots[0].decimal_odds)}\n"
+                f"🏁 {snapshots[1].selection}: {format_odds(snapshots[1].decimal_odds)}\n\n"
+                "Цей ринок рахується за весь матч: овертайм і пенальті включно."
+            )
+        except (ValueError, BettingError) as exc:
+            await message.answer(str(exc))
+
+    @router.message(Command("admin_advance"))
+    async def admin_advance(message: Message, bot: Bot) -> None:
+        if not _is_admin(message, settings):
+            await message.answer("Ця команда тільки для адміна.")
+            return
+        args = _args(message)
+        if len(args) < 2:
+            await message.answer("Формат: /admin_advance <id_матчу> <команда>")
+            return
+        try:
+            match_id = int(args[0])
+            advancing_team = " ".join(args[1:])
+            async with session_factory() as session:
+                single_bet_ids, express_bet_ids = await _open_settlement_target_ids(session, match_id)
+                count = await settle_qualification_market(
+                    session,
+                    match_id,
+                    advancing_team,
+                    admin_telegram_id=message.from_user.id,
+                )
+                match = await session.scalar(select(Match).where(Match.id == match_id))
+                details = await _settlement_results_for_targets(
+                    session,
+                    match,
+                    single_bet_ids,
+                    express_bet_ids,
+                )
+                await session.commit()
+            winner = advancing_team
+            if match:
+                if canonical_team_name(advancing_team) == canonical_team_name(match.home_team):
+                    winner = match.home_team
+                elif canonical_team_name(advancing_team) == canonical_team_name(match.away_team):
+                    winner = match.away_team
+            await message.answer(
+                "Прохід далі розраховано.\n\n"
+                f"Матч #{match_id}\n"
+                f"Пройшла команда: {winner}\n"
+                f"Розраховано ставок/експресів: {count}."
+            )
+            if match:
+                board = await _leaderboard_text(session_factory, settings)
+                details_block = f"{details}\n\n" if details else ""
+                await _announce_to_group(
+                    session_factory,
+                    bot,
+                    "Прохід далі розраховано.\n\n"
+                    f"{format_match_pair(match)}\n"
+                    f"Пройшла команда: {winner}\n\n"
+                    f"{details_block}"
+                    f"{board}",
+                    source_chat_id=message.chat.id,
+                    settlements_only=True,
+                )
+        except (ValueError, BettingError) as exc:
+            await message.answer(str(exc))
+
     @router.message(Command("admin_close"))
     async def admin_close(message: Message) -> None:
         if not _is_admin(message, settings):
@@ -875,6 +974,40 @@ async def _today_matches_view(
     lines = ["📅 Ставки на сьогодні", f"Сторінка {page + 1}", ""]
     lines.extend(match_line(match) for match in matches)
     return "\n\n".join(lines), matches_keyboard(matches, page, has_next, page_callback="m:today")
+
+
+async def _admin_matches_text(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> str:
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        matches = (
+            await session.scalars(
+                select(Match)
+                .where(Match.kickoff_at >= now - timedelta(days=3))
+                .order_by(Match.kickoff_at, Match.id)
+                .limit(30)
+            )
+        ).all()
+    if not matches:
+        return "🏆 Матчі для адміна\n\nМатчів не знайдено."
+
+    lines = [
+        "🏆 Матчі для адміна",
+        "",
+        "ID потрібен для /admin_qualify_odds і /admin_advance.",
+        "",
+    ]
+    for match in matches:
+        kickoff = _aware_utc(match.kickoff_at).strftime("%Y-%m-%d %H:%M UTC")
+        status = match.status.value
+        score = ""
+        if match.home_score is not None and match.away_score is not None:
+            score = f" · {match.home_score}:{match.away_score}"
+        lines.append(f"#{match.id} {match_title(match)}")
+        lines.append(f"{kickoff} · {status}{score}")
+        lines.append("")
+    return "\n".join(lines).strip()
 
 async def _odds_view(
     session_factory: async_sessionmaker[AsyncSession],

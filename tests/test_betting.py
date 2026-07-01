@@ -29,6 +29,8 @@ from app.services.betting import (
     place_express_bet,
     reset_test_state,
     reset_user_state,
+    set_manual_qualification_odds,
+    settle_qualification_market,
     settle_match,
     void_match,
 )
@@ -466,6 +468,103 @@ async def test_score_sync_settles_to_qualify_with_advancing_team(
         refreshed = await session.scalar(select(User).where(User.telegram_id == 10))
 
     assert len(results) == 1
+    assert bet.status == BetStatus.won
+    assert bet.payout_cents == 2000
+    assert refreshed.balance_cents == 11000
+
+
+async def test_manual_qualification_odds_create_two_open_team_prices(session_factory):
+    async with session_factory() as session:
+        match = Match(
+            api_id="manual-qualification",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Brazil",
+            away_team="Japan",
+            kickoff_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        session.add(match)
+        await session.flush()
+
+        snapshots = await set_manual_qualification_odds(
+            session,
+            match.id,
+            Decimal("1.40"),
+            Decimal("2.80"),
+        )
+        await session.commit()
+
+    assert [(row.selection, row.decimal_odds) for row in snapshots] == [
+        ("Brazil", Decimal("1.400")),
+        ("Japan", Decimal("2.800")),
+    ]
+    assert snapshots[0].market.type == MarketType.to_qualify
+    assert snapshots[0].market.status == MarketStatus.open
+    assert snapshots[0].market.source == "manual"
+
+
+async def test_settle_match_infers_qualification_winner_from_regulation_score(
+    session_factory,
+    settings,
+):
+    async with session_factory() as session:
+        user = await get_or_create_user(session, 10, "friend", "Friend", settings)
+        match = Match(
+            api_id="qualify-regulation-winner",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Brazil",
+            away_team="Japan",
+            kickoff_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        session.add(match)
+        await session.flush()
+        snapshots = await set_manual_qualification_odds(
+            session,
+            match.id,
+            Decimal("1.80"),
+            Decimal("2.00"),
+        )
+        await place_bet(session, user.telegram_id, snapshots[0].id, 1000, settings)
+
+        await settle_match(session, match.id, 2, 1)
+        await session.commit()
+        bet = await session.scalar(select(Bet))
+        refreshed = await session.scalar(select(User).where(User.telegram_id == 10))
+
+    assert bet.status == BetStatus.won
+    assert bet.payout_cents == 1800
+    assert refreshed.balance_cents == 10800
+
+
+async def test_admin_advance_settles_only_qualification_after_regulation_draw(
+    session_factory,
+    settings,
+):
+    async with session_factory() as session:
+        user = await get_or_create_user(session, 10, "friend", "Friend", settings)
+        match = Match(
+            api_id="qualify-manual-advance",
+            sport_key="soccer_fifa_world_cup",
+            home_team="Brazil",
+            away_team="Japan",
+            kickoff_at=datetime.now(timezone.utc) + timedelta(days=1),
+        )
+        session.add(match)
+        await session.flush()
+        snapshots = await set_manual_qualification_odds(
+            session,
+            match.id,
+            Decimal("1.80"),
+            Decimal("2.00"),
+        )
+        await place_bet(session, user.telegram_id, snapshots[1].id, 1000, settings)
+
+        await settle_match(session, match.id, 1, 1)
+        count = await settle_qualification_market(session, match.id, "Japan", admin_telegram_id=10)
+        await session.commit()
+        bet = await session.scalar(select(Bet))
+        refreshed = await session.scalar(select(User).where(User.telegram_id == 10))
+
+    assert count == 1
     assert bet.status == BetStatus.won
     assert bet.payout_cents == 2000
     assert refreshed.balance_cents == 11000
