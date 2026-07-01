@@ -46,14 +46,14 @@ async def test_user_gets_starting_balance(session_factory, settings):
     assert user.balance_cents == 10000
 
 
-async def test_new_user_gets_configured_playoff_bonus(session_factory, settings):
+async def test_new_user_does_not_get_playoff_bonus_automatically(session_factory, settings):
     settings.playoff_bonus_cents = 10000
     async with session_factory() as session:
         user = await get_or_create_user(session, 10, "friend", "Friend", settings)
         await session.commit()
 
-    assert user.balance_cents == 20000
-    assert user.playoff_bonus_cents == 10000
+    assert user.balance_cents == 10000
+    assert user.playoff_bonus_cents == 0
 
 
 async def test_playoff_bonus_adds_balance_without_profit_and_is_idempotent(session_factory, settings):

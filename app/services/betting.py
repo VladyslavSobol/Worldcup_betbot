@@ -45,13 +45,12 @@ async def get_or_create_user(
         user.username = username
         user.first_name = first_name
         return user
-    playoff_bonus_cents = max(settings.playoff_bonus_cents, 0)
     user = User(
         telegram_id=telegram_id,
         username=username,
         first_name=first_name,
-        balance_cents=settings.starting_balance_cents + playoff_bonus_cents,
-        playoff_bonus_cents=playoff_bonus_cents,
+        balance_cents=settings.starting_balance_cents,
+        playoff_bonus_cents=0,
     )
     session.add(user)
     await session.flush()
